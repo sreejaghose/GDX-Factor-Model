@@ -88,7 +88,8 @@ class ValidationGate:
                 f"({len(prior)} prior entr{'y' if len(prior) == 1 else 'ies'}). Re-selecting after "
                 "seeing validation results is a protocol deviation: pass a reason to log it.")
         entry = dict(timestamp=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-                     shortlist_hash=h, n_configs=len(shortlist), shortlist=sorted(shortlist),
+                     shortlist_hash=h, n_configs=len(shortlist),
+                     shortlist=sorted(shortlist) if len(shortlist) <= 200 else "omitted (see hash)",
                      evaluation_number=len(prior) + 1, deviation=deviation, reason=reason)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a") as f:

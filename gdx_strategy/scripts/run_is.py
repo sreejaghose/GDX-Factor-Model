@@ -4,7 +4,9 @@
                                         # shortlist + statistical checks (no validation)
   python scripts/run_is.py --validate   # ... then evaluate the shortlist on validation
                                         # (logged), pick primary + alternates, freeze,
-                                        # and run the anchored walk-forward check
+                                        # run the anchored walk-forward check, and report
+  python scripts/run_is.py --report     # rebuild grid_results.parquet + report.html from
+                                        # the existing frozen_config.json (no re-selection)
 
 Everything is deterministic (seeded); rerunning the development stage reproduces
 the same shortlist.
@@ -28,10 +30,14 @@ sys.path.insert(0, str(ROOT))
 
 from src.data import check_adjusted_closes, load_dataset  # noqa: E402
 from src.grid import GridResult, load_grid, run_grid  # noqa: E402
-from src.metrics import grid_metrics  # noqa: E402
+from src.factor_model import ResidualCache, full_sample_ols  # noqa: E402
+from src.forecast import ForecastCache  # noqa: E402
+from src.metrics import MIN_DAYS_PER_MONTH, grid_metrics  # noqa: E402
+from src import report as rp  # noqa: E402
 from src.robustness import (FILTERS, filter_funnel, hard_filters, make_selection_rule,  # noqa: E402
                             rank_configs, simplicity_key, statistical_checks)
-from src.splits import evaluate_validation, load_splits, split_masks, walk_forward  # noqa: E402
+from src.splits import (ValidationGate, evaluate_validation, load_splits, split_masks,  # noqa: E402
+                        walk_forward)
 
 log = logging.getLogger("run_is")
 RESULTS = ROOT / "results"
@@ -243,10 +249,207 @@ def validation_and_freeze(args, cfg, splits, returns, workbook, g, ranked, short
     return frozen
 
 
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+SECTION8 = ["sharpe", "sharpe_gross", "ann_return", "ann_vol", "sortino", "max_drawdown", "calmar", "nw_tstat",
+            "hit_rate", "avg_win", "avg_loss", "profit_factor", "mean_trade", "n_entries", "entries_per_month",
+            "pct_months_with_entry", "pct_days_in_market", "avg_holding_days", "turnover_per_year",
+            "pct_years_positive", "worst_year", "rolling12m_sharpe_min", "rolling12m_pct_positive",
+            "sharpe_first_half", "sharpe_second_half", "long_leg_pnl", "short_leg_pnl",
+            "ann_return_ex_top1pct_days", "top10_trades_pnl_share", "corr_GDX", "beta_GDX", "corr_SPY",
+            "beta_SPY", "corr_GLD", "beta_GLD"]
+
+
+def grid_results_table(g, returns, masks, cost) -> pd.DataFrame:
+    """Every config (incl. D reference) x period: development, validation, full, each year."""
+    ValidationGate(load_splits(ROOT / "config" / "splits.yaml")["validation_log"]).check_and_log(
+        list(g.configs.index),
+        reason="post-freeze reporting: full-grid metrics for grid_results.parquet (selection already frozen)")
+    full = masks["development"] | masks["validation"]
+    periods = {"development": (masks["development"], True), "validation": (masks["validation"], True),
+               "full": (full, True)}
+    for y in sorted(set(g.dates[full].year)):
+        periods[str(y)] = (full & np.asarray(g.dates.year == y), False)
+    parts = []
+    params = g.configs[PARAMS].assign(factors=g.configs["factors"].map("+".join))
+    for name, (m, trades) in periods.items():
+        if m.sum() < 20:
+            continue
+        t = grid_metrics(g, returns, m, cost, with_trades=trades).table
+        parts.append(pd.concat([params, t], axis=1).assign(period=name).reset_index())
+        log.info("  grid_results: %s done", name)
+    return pd.concat(parts, ignore_index=True).set_index(["config_id", "period"])
+
+
+def make_report(cfg, splits, returns, g, ranked, frozen):
+    figs = RESULTS / "figures"
+    cost = cfg["fixed"]["cost_bps"]
+    masks = split_masks(g, splits)
+    dev, val = masks["development"], masks["validation"]
+    periods = {"development": (g.dates[dev][0], g.dates[dev][-1]),
+               "validation": (g.dates[val][0], g.dates[val][-1])}
+    prim = frozen["primary"]
+    pp = prim["params"]
+    F, L, M = tuple(pp["factors"]), pp["lookback"], pp["m"]
+    finalists = [prim["config_id"]] + [a["config_id"] for a in frozen["alternates"]]
+    rc = ResidualCache(returns, min_obs_frac=cfg["fixed"]["stage1_min_obs_frac"])
+    fcache = ForecastCache(rc, window=cfg["fixed"]["stage2_window"], min_obs=cfg["fixed"]["stage2_min_obs"])
+    exret = returns["ExRet_GDX"]
+
+    # parquet: every config x period
+    gr = grid_results_table(g, returns, masks, cost)
+    f32 = gr.select_dtypes("float64").columns
+    gr[f32] = gr[f32].astype("float32")
+    gr.to_parquet(RESULTS / "grid_results.parquet", compression="zstd", compression_level=9)
+
+    def closes(mask):
+        c = np.zeros(len(g.dates), bool)
+        rows = np.flatnonzero(mask)
+        c[rows[rows > 0] - 1] = True
+        return c
+
+    # 1 event study
+    fc = fcache.forecast(F, L, M)
+    es = {name: rp.event_study(fc, exret, cfg["grid"]["k"], pp["direction_mode"], closes(m))
+          for name, m in (("development", dev), ("validation", val))}
+    pd.concat([d.assign(period=n) for n, d in es.items()]).to_csv(RESULTS / "event_study.csv", index=False)
+    f1 = rp.plot_event_study(es, figs / "event_study.png",
+                             f"Event study, {'+'.join(F)} L={L} m={M}, direction={pp['direction_mode']} "
+                             "(bands ±1 s.e.; overlapping events)")
+
+    # 2 heatmaps (development)
+    dev_tab = ranked[PARAMS + ["sharpe"]]
+    f2a = rp.plot_heatmaps(dev_tab, "H", "k", {"lookback": L, "m": M, "direction_mode": pp["direction_mode"]},
+                           figs / "heatmap_k_H.png", highlight={**pp, "factors": "+".join(F)})
+    f2b = rp.plot_heatmaps(dev_tab, "k", "lookback", {"m": M, "H": pp["H"], "direction_mode": pp["direction_mode"]},
+                           figs / "heatmap_L_k.png", highlight={**pp, "factors": "+".join(F)})
+
+    # 3 gamma over time
+    f3 = rp.plot_gamma({f"{'+'.join(F)} L={L} m={m}": fcache.forecast(F, L, m) for m in cfg["grid"]["m"]},
+                       periods, figs / "gamma.png")
+
+    # 4 rolling betas
+    fs = full_sample_ols(returns, F)
+    betas = {f"L={x}": rc.betas(F, x) for x in sorted({L, 60, 250})}
+    f4 = rp.plot_rolling_betas(betas, figs / "rolling_betas.png",
+                               full_sample={f"beta_{f}": fs[f"Beta_{f}"] for f in F},
+                               title=f"Stage-1 rolling betas, {'+'.join(F)}")
+
+    # 5 equity + drawdown
+    full = dev | val
+    nets = g.net_returns(cost, rows=finalists, mask=full)
+    labels = {c: ("PRIMARY " if c == finalists[0] else "alt ") + c for c in finalists}
+    bh = pd.Series(np.nan_to_num(g.exret[full]), index=g.dates[full])
+    f5 = rp.plot_equity({labels[c]: nets[c] for c in finalists}, bh, periods, figs / "equity.png")
+
+    # 6 monthly entries
+    cm = closes(full)
+    months = g.dates[cm].to_period("M")
+    ent = {}
+    for c in finalists:
+        s = pd.Series(g.new_trade[g.configs.index.get_loc(c), cm], index=months).groupby(level=0).agg(["sum", "size"])
+        ent[labels[c]] = s.loc[s["size"] >= MIN_DAYS_PER_MONTH, "sum"]
+    f6 = rp.plot_monthly_entries(ent, periods, figs / "monthly_entries.png")
+
+    # 7 yearly table
+    yearly = pd.concat({**{labels[c]: nets[c] for c in finalists}, "buy & hold GDX": bh}, axis=1)
+    ytab = yearly.groupby(yearly.index.year).sum()
+    ytab.index.name = "year"
+    ytab.loc["dev ann. Sharpe"] = [yearly.loc[g.dates[dev], c].mean() / yearly.loc[g.dates[dev], c].std() * np.sqrt(252)
+                                   for c in yearly]
+    ytab.loc["val ann. Sharpe"] = [yearly.loc[g.dates[val], c].mean() / yearly.loc[g.dates[val], c].std() * np.sqrt(252)
+                                   for c in yearly]
+    ytab.to_csv(RESULTS / "finalists_yearly.csv")
+
+    # 8 top 20 by neighbourhood score
+    top20 = ranked.sort_values("nbhd_median", ascending=False).head(20)
+    top20 = _fmt_table(top20[["nbhd_median", "nbhd_min", "nbhd_frac_positive", "passes", "n_failed"] + SECTION8])
+    top20.to_csv(RESULTS / "top20_neighbourhood.csv")
+
+    # finalists at several cost levels
+    cost_rows = []
+    for c in finalists:
+        for name, m in (("development", dev), ("validation", val)):
+            n0 = g.net_returns(0.0, rows=[c], mask=m).iloc[:, 0]
+            row = {"config": labels[c], "period": name}
+            for x in cfg["report"]["cost_bps"]:
+                n = g.net_returns(x, rows=[c], mask=m).iloc[:, 0]
+                row[f"Sharpe @ {x:g} bps"] = n.mean() / n.std() * np.sqrt(252)
+                row[f"ann. return @ {x:g} bps"] = n.mean() * 252
+            cost_rows.append(row)
+    costs = pd.DataFrame(cost_rows).set_index(["config", "period"])
+
+    # text + tables
+    wf = pd.read_csv(RESULTS / "walk_forward.csv", index_col="year")
+    wfs = json.loads((RESULTS / "walk_forward_summary.json").read_text())
+    vshort = pd.read_csv(RESULTS / "validation_shortlist.csv", index_col="config_id")
+    dshort = pd.read_csv(RESULTS / "dev_shortlist.csv", index_col="config_id")
+    funnel = pd.read_csv(RESULTS / "dev_filter_funnel.csv")
+    vlog = pd.DataFrame(ValidationGate(splits["validation_log"]).entries())[
+        ["timestamp", "evaluation_number", "n_configs", "shortlist_hash", "deviation", "reason"]]
+    ok = frozen["status"] == "ok"
+    banner = (f'<div class="{"ok" if ok else "warn"}"><b>Status: {html_escape(frozen["status"])}.</b> '
+              + ("The primary passed every hard filter on development and validation."
+                 if ok else
+                 "No shortlisted config passed the hard filters on validation. The primary below is the "
+                 "best by fewest failures and composite rank, and does <b>not</b> meet the stated "
+                 "requirements; treat OOS results for it as a test, not a deployment.") + "</div>")
+    pv, pdv = prim["validation"], prim["development"]
+    ck = prim["development_checks"]
+    summary = f"""{banner}
+<p><b>Primary:</b> <code>{prim['config_id']}</code> &nbsp; alternates: {', '.join('<code>'+a['config_id']+'</code>' for a in frozen['alternates'])}</p>
+<ul>
+<li>Development net Sharpe {pdv['sharpe']:.2f} (neighbourhood median {pdv['nbhd_median']:.2f}); validation net Sharpe {pv['sharpe']:.2f}.
+ Validation failed filters: {', '.join(pv['failed_filters']) or 'none'}.</li>
+<li>Deflated Sharpe ratio (N = {frozen['n_configs_tested']:,} configs): {ck['dsr']:.3f}; placebo percentile {ck['placebo_percentile']:.1f};
+ sign-flip Sharpe {ck['sign_flip_sharpe']:.2f}; bootstrap 95% CI [{ck['boot_sharpe_lo95']:.2f}, {ck['boot_sharpe_hi95']:.2f}].</li>
+<li>Walk-forward of the selection rule 2011–2021: stitched net Sharpe {wfs['stitched_sharpe']:.2f},
+ {wfs['stability']['n_distinct_configs']} distinct configs in {wfs['stability']['n_years']} years
+ (red flag: {wfs['stability']['red_flag']}).</li>
+<li>Frozen {frozen['frozen_at']} at commit <code>{frozen['git_commit'][:10]}</code> (dirty: {frozen['git_dirty']});
+ data {frozen['data']['file']} sha256 <code>{frozen['data']['sha256'][:12]}…</code>.</li>
+</ul>
+<p class="muted">All returns are daily GDX excess returns on 1x notional (self-financing overlay), net of
+{cost:g} bps per unit traded unless stated. Signals are formed and executed at the close of day t.
+Development {periods['development'][0].date()} → {periods['development'][1].date()},
+validation {periods['validation'][0].date()} → {periods['validation'][1].date()}.</p>"""
+
+    sections = [
+        ("Summary", summary),
+        ("1. Event study / decay curve", rp.img_tag(f1) + "<p class='muted'>Average cumulative GDX excess "
+         "return after signal closes with |z| ≥ k, by side, and in the trade's direction (right). Bands are "
+         "±1 s.e. treating events as independent; overlapping events make them too narrow.</p>"),
+        ("2. Development net Sharpe heatmaps", rp.img_tag(f2a) + rp.img_tag(f2b)),
+        ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3)),
+        ("4. Stage-1 rolling betas", rp.img_tag(f4)),
+        ("5. Equity curve and drawdown", rp.img_tag(f5)),
+        ("6. Monthly entry counts", rp.img_tag(f6)),
+        ("7. Yearly net returns (finalists)", rp.table_html(ytab)),
+        ("Finalists at 0 / 2 / 5 bps", rp.table_html(costs)),
+        ("8. Top 20 configs by neighbourhood score (development)", rp.table_html(top20)),
+        ("Selection funnel (development)", rp.table_html(funnel.set_index("after_filter"))),
+        ("Development shortlist with statistical checks", rp.table_html(dshort)),
+        ("Validation results (shortlist)", rp.table_html(vshort)),
+        ("Walk-forward of the selection rule", rp.table_html(wf) + f"<pre>{html_escape(json.dumps(wfs, indent=1))}</pre>"),
+        ("Validation log", rp.table_html(vlog)),
+    ]
+    out = rp.build_html("GDX residual-reversal strategy — in-sample report", sections, RESULTS / "report.html")
+    log.info("Report written: %s", out)
+    return out
+
+
+def html_escape(s) -> str:
+    import html as _h
+    return _h.escape(str(s))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--workbook", default=str(ROOT / "data" / "raw" / "gold_etf_factor_regression.xlsx"))
     ap.add_argument("--validate", action="store_true", help="evaluate shortlist on validation and freeze")
+    ap.add_argument("--report", action="store_true", help="rebuild report from existing frozen_config.json")
     ap.add_argument("--reason", default=None, help="required (and logged) if validation is re-run on a "
                                                    "different shortlist")
     args = ap.parse_args()
@@ -262,7 +465,11 @@ def main():
 
     g, ranked, short = development(args, cfg, splits, returns, workbook)
     if args.validate:
-        validation_and_freeze(args, cfg, splits, returns, workbook, g, ranked, short)
+        frozen = validation_and_freeze(args, cfg, splits, returns, workbook, g, ranked, short)
+        make_report(cfg, splits, returns, g, ranked, _jsonable(frozen))
+    elif args.report:
+        frozen = json.loads((RESULTS / "frozen_config.json").read_text())
+        make_report(cfg, splits, returns, g, ranked, frozen)
     else:
         log.info("Stopped before validation. Review results/dev_shortlist.csv, then rerun with --validate.")
 

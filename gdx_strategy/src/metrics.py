@@ -17,6 +17,7 @@ Conventions
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -243,8 +244,10 @@ def compute_metrics(pos: np.ndarray, new: np.ndarray, dates: pd.DatetimeIndex, r
     yearly_sharpe = np.column_stack([_sharpe(net[:, s:s + L], 1) for s, L in zip(y_starts, y_len)])
     out["pct_years_positive"] = (yearly > 0).mean(1)
     out["worst_year"] = yearly.min(1)
-    out["worst_year_sharpe"] = np.nanmin(yearly_sharpe, 1)
-    out["median_year_sharpe"] = np.nanmedian(yearly_sharpe, 1)
+    with warnings.catch_warnings():  # configs flat for a whole year have NaN Sharpe there
+        warnings.simplefilter("ignore", RuntimeWarning)
+        out["worst_year_sharpe"] = np.nanmin(yearly_sharpe, 1)
+        out["median_year_sharpe"] = np.nanmedian(yearly_sharpe, 1)
     rs = _rolling_sharpe(net, ROLL_WINDOW)
     out["rolling12m_sharpe_min"] = rs.min(1) if rs.shape[1] else np.nan
     out["rolling12m_pct_positive"] = (rs > 0).mean(1) if rs.shape[1] else np.nan
