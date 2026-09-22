@@ -230,6 +230,7 @@ def validation_and_freeze(args, cfg, splits, returns, workbook, g, ranked, short
     for e in [frozen["primary"], *frozen["alternates"]]:
         e["development"]["yearly_net_return"] = dev_yearly.loc[e["config_id"]].to_dict()
     (RESULTS / "frozen_config.json").write_text(json.dumps(_jsonable(frozen), indent=2))
+    (RESULTS / "frozen_config.sha256").write_text(f"{_sha256(RESULTS / 'frozen_config.json')}  frozen_config.json\n")
     log.info("Frozen: primary %s; alternates %s (status: %s)", chosen[0], chosen[1:], status)
 
     # anchored walk-forward of the selection rule (diagnostic)
@@ -303,6 +304,16 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
     f32 = gr.select_dtypes("float64").columns
     gr[f32] = gr[f32].astype("float32")
     gr.to_parquet(RESULTS / "grid_results.parquet", compression="zstd", compression_level=9)
+    keep = PARAMS + ["sharpe", "sharpe_gross", "ann_return", "ann_vol", "max_drawdown", "nw_tstat", "n_entries",
+                     "pct_months_with_entry", "pct_years_positive", "sharpe_first_half", "sharpe_second_half",
+                     "ann_return_ex_top1pct_days", "hit_rate", "n_days"]
+    summ = gr.loc[gr.index.get_level_values("period").isin(["development", "validation", "full"]), keep]
+    summ.reset_index().to_csv(RESULTS / "all_configs_summary.csv.gz", index=False, float_format="%.6g")
+    (RESULTS / "grid_manifest.json").write_text(json.dumps(_jsonable({
+        "n_configs_total": len(g.configs), "n_selectable": g.n_tested,
+        "n_reference_only": int((g.configs["policy"] == "D_stack_2x").sum()),
+        "signal_start": g.signal_start, "grid_yaml_sha256": _sha256(ROOT / "config" / "grid.yaml"),
+        "cost_bps": cost, "periods": ["development", "validation", "full"]}), indent=2))
 
     def closes(mask):
         c = np.zeros(len(g.dates), bool)
@@ -381,6 +392,54 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
             cost_rows.append(row)
     costs = pd.DataFrame(cost_rows).set_index(["config", "period"])
 
+    # --- honest-reporting checks -------------------------------------------------
+    # (a) closest configs: development configs failing exactly one hard filter
+    one = ranked[ranked["n_failed"] == 1].copy()
+    one["failed_filter"] = one[FILTERS].idxmin(axis=1)
+    closest_counts = one["failed_filter"].value_counts().rename("n_configs_failing_only_this").to_frame()
+    closest = _fmt_table(one.sort_values("nbhd_median", ascending=False).head(15)[
+        PARAMS + ["failed_filter", "nbhd_median", "sharpe", "pct_months_with_entry", "n_entries",
+                  "sharpe_first_half", "sharpe_second_half", "pct_years_positive", "ann_return_ex_top1pct_days"]])
+    closest.to_csv(RESULTS / "dev_closest_configs.csv")
+    vfail = pd.read_csv(RESULTS / "validation_shortlist.csv", index_col="config_id")
+    vfail["failed_filters"] = vfail[FILTERS].apply(lambda r: ", ".join(f for f in FILTERS if not r[f]) or "none",
+                                                   axis=1)
+    vclosest = vfail[["sharpe", "n_failed", "failed_filters", "ann_return_ex_top1pct_days",
+                      "sharpe_first_half", "sharpe_second_half", "pct_years_positive", "pct_months_with_entry"]]
+
+    # (b) day-1 concentration: edge (return in trade direction) by horizon
+    ev = pd.concat([d.assign(period=n) for n, d in es.items()])
+    ev = ev[(ev.side == "edge") & ev.h.isin([1, 2, 3, 5, 10])]
+    day1 = (ev.assign(edge_bps=ev["mean"] * 1e4)
+              .pivot_table(index=["period", "k"], columns="h", values="edge_bps"))
+    day1.columns = [f"cum edge to day {h} (bps)" for h in day1.columns]
+    day1.to_csv(RESULTS / "event_study_edge_by_horizon.csv")
+    kk = pp["k"]
+    d_dev = day1.loc[("development", kk)]
+    d_val = day1.loc[("validation", kk)]
+    day1_text = (f"At the primary's k={kk:g}: cumulative edge after day 1 is {d_dev.iloc[0]:+.1f} bps (dev) / "
+                 f"{d_val.iloc[0]:+.1f} bps (val); after day 2 {d_dev.iloc[1]:+.1f} / {d_val.iloc[1]:+.1f} bps; "
+                 f"after day 10 {d_dev.iloc[-1]:+.1f} / {d_val.iloc[-1]:+.1f} bps. ")
+    peak_h = int(ev[(ev.k == kk) & (ev.period == "development")].set_index("h")["mean"].idxmax())
+    day1_text += ("The day-1 concentration hypothesis is <b>supported</b>." if peak_h == 1 and d_dev.iloc[0] > 0
+                  else f"The day-1 concentration hypothesis is <b>not supported</b>: the edge is small on day 1 "
+                       f"and peaks around day {peak_h} in development, then decays.")
+
+    # (c) with / without 2008 and 2020
+    excl = rp.exclude_years_table(nets, [2008, 2020])
+    excl.index = [labels[c] for c in excl.index]
+    excl.to_csv(RESULTS / "finalists_ex_years.csv")
+
+    # (d) gross vs net viability (primary)
+    pc_dev = costs.loc[(labels[finalists[0]], "development")]
+    pc_val = costs.loc[(labels[finalists[0]], "validation")]
+    viable = pc_val["Sharpe @ 5 bps"] > 0 and pc_dev["Sharpe @ 5 bps"] > 0
+    cost_text = (f"Primary Sharpe gross / 2 bps / 5 bps: development {pc_dev['Sharpe @ 0 bps']:.2f} / "
+                 f"{pc_dev['Sharpe @ 2 bps']:.2f} / {pc_dev['Sharpe @ 5 bps']:.2f}; validation "
+                 f"{pc_val['Sharpe @ 0 bps']:.2f} / {pc_val['Sharpe @ 2 bps']:.2f} / {pc_val['Sharpe @ 5 bps']:.2f}. "
+                 + ("The edge survives 5 bps but each bp of cost removes a visible share of it."
+                    if viable else "<b>The edge does not survive 5 bps; not viable at realistic costs.</b>"))
+
     # text + tables
     wf = pd.read_csv(RESULTS / "walk_forward.csv", index_col="year")
     wfs = json.loads((RESULTS / "walk_forward_summary.json").read_text())
@@ -427,7 +486,15 @@ validation {periods['validation'][0].date()} → {periods['validation'][1].date(
         ("5. Equity curve and drawdown", rp.img_tag(f5)),
         ("6. Monthly entry counts", rp.img_tag(f6)),
         ("7. Yearly net returns (finalists)", rp.table_html(ytab)),
-        ("Finalists at 0 / 2 / 5 bps", rp.table_html(costs)),
+        ("Finalists at 0 / 2 / 5 bps (gross vs net)", f"<p>{cost_text}</p>" + rp.table_html(costs)),
+        ("Does the result depend on 2008 or 2020?", rp.table_html(excl) +
+         "<p class='muted'>Finalists over development + validation, net of 2 bps.</p>"),
+        ("Is the edge concentrated on day 1?", f"<p>{day1_text}</p>" + rp.table_html(day1, 1)),
+        ("Closest configs and the filter they fail",
+         "<p>No filter was loosened. Development configs that fail exactly one hard filter "
+         "(counts, then the 15 best by neighbourhood score):</p>" + rp.table_html(closest_counts)
+         + rp.table_html(closest) + "<p>Shortlist on validation, with the filters each one fails:</p>"
+         + rp.table_html(vclosest)),
         ("8. Top 20 configs by neighbourhood score (development)", rp.table_html(top20)),
         ("Selection funnel (development)", rp.table_html(funnel.set_index("after_filter"))),
         ("Development shortlist with statistical checks", rp.table_html(dshort)),

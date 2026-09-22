@@ -131,24 +131,15 @@ class GridResult:
                    pd.Timestamp(int(z["signal_start"])), int(z["n_tested"]))
 
 
-def run_grid(returns: pd.DataFrame, cfg: dict, include_reference: bool = False,
-             signal_start: pd.Timestamp | None = None) -> GridResult:
-    """Run every config. ``signal_start`` overrides the computed common start
-    (used later for OOS, where warm-up comes from appended IS history)."""
-    grid, fixed = cfg["grid"], cfg["fixed"]
-    policies = list(grid["policy"])
-    if include_reference:
-        policies += cfg.get("reference_only", {}).get("policy", [])
-    configs = enumerate_configs(grid, policies)
-
+def run_configs(returns: pd.DataFrame, configs: pd.DataFrame, fixed: dict,
+                signal_start: pd.Timestamp, n_tested: int | None = None) -> GridResult:
+    """Run an explicit set of configs (rows with GRID_KEYS columns), all starting flat
+    with signals zeroed before ``signal_start``."""
     rc = ResidualCache(returns, min_obs_frac=fixed["stage1_min_obs_frac"])
     fcache = ForecastCache(rc, window=fixed["stage2_window"], min_obs=fixed["stage2_min_obs"])
-    start = common_signal_start(fcache, grid) if signal_start is None else pd.Timestamp(signal_start)
+    start = pd.Timestamp(signal_start)
     dates = returns.index
     before = np.asarray(dates < start)
-    log.info("Grid: %d configs (%d selectable); signals from %s, scored from next row",
-             len(configs), n_configs(grid), start.date())
-
     pos = np.zeros((len(configs), len(dates)), np.int8)
     new = np.zeros_like(pos)
     row_of = {cid: i for i, cid in enumerate(configs.index)}
@@ -161,4 +152,22 @@ def run_grid(returns: pd.DataFrame, cfg: dict, include_reference: bool = False,
                 p, _, nt, _ = run_engine(sig, c["H"], c["policy"])
                 pos[row_of[cid]], new[row_of[cid]] = p, nt
     return GridResult(configs, dates, returns["ExRet_GDX"].to_numpy(float), pos, new, start,
-                      n_configs(grid))
+                      len(configs) if n_tested is None else n_tested)
+
+
+def run_grid(returns: pd.DataFrame, cfg: dict, include_reference: bool = False,
+             signal_start: pd.Timestamp | None = None) -> GridResult:
+    """Run every config. ``signal_start`` overrides the computed common start
+    (used for OOS, where warm-up comes from IS history)."""
+    grid, fixed = cfg["grid"], cfg["fixed"]
+    policies = list(grid["policy"])
+    if include_reference:
+        policies += cfg.get("reference_only", {}).get("policy", [])
+    configs = enumerate_configs(grid, policies)
+    if signal_start is None:
+        rc = ResidualCache(returns, min_obs_frac=fixed["stage1_min_obs_frac"])
+        fcache = ForecastCache(rc, window=fixed["stage2_window"], min_obs=fixed["stage2_min_obs"])
+        signal_start = common_signal_start(fcache, grid)
+    log.info("Grid: %d configs (%d selectable); signals from %s, scored from next row",
+             len(configs), n_configs(grid), pd.Timestamp(signal_start).date())
+    return run_configs(returns, configs, fixed, signal_start, n_configs(grid))

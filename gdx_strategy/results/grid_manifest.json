@@ -1,0 +1,13 @@
+{
+  "n_configs_total": 14400,
+  "n_selectable": 10800,
+  "n_reference_only": 3600,
+  "signal_start": "2008-05-23",
+  "grid_yaml_sha256": "27e13e20fc955dadfb6a5c9b727584d8af5012e81474967418e7474ac90bf256",
+  "cost_bps": 2.0,
+  "periods": [
+    "development",
+    "validation",
+    "full"
+  ]
+}

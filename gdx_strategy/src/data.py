@@ -151,3 +151,55 @@ def load_dataset(path: str | Path, rf_mode: RFMode = "prior_month",
         check_adjusted_closes(prices)
     returns = build_returns(prices, fedfunds, rf_mode)
     return prices, returns
+
+
+class SeamError(ValueError):
+    """IS and OOS data do not join cleanly."""
+
+
+def load_is_oos(is_path: str | Path, oos_path: str | Path, rf_mode: RFMode = "prior_month",
+                max_gap_weekdays: int = 4, price_rtol: float = 1e-6) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """Concatenate IS and OOS prices, check the seam, and build returns.
+
+    * Overlapping dates must carry identical prices (within ``price_rtol``); they are
+      then dropped from OOS. Differing prices, or OOS dates inside the IS range that
+      IS doesn't have, raise SeamError.
+    * More than ``max_gap_weekdays`` weekdays strictly between the last IS date and
+      the first OOS date raises SeamError (the first OOS return would span the gap).
+    * FEDFUNDS: IS values are kept for IS months (so IS returns reproduce exactly);
+      OOS values fill later months.
+    """
+    px_is, px_oos = load_prices(is_path), load_prices(oos_path)
+    if px_oos.empty:
+        raise SeamError("OOS file has no price rows")
+    is_last = px_is.index[-1]
+    info: dict = {"is_first": px_is.index[0], "is_last": is_last, "n_is_rows": len(px_is)}
+    inside = px_oos.index[px_oos.index <= is_last]
+    if len(inside):
+        missing = inside.difference(px_is.index)
+        if len(missing):
+            raise SeamError(f"OOS has {len(missing)} dates inside the IS range that IS lacks "
+                            f"(first {missing[0].date()})")
+        a, b = px_is.loc[inside], px_oos.loc[inside]
+        both = a.notna() & b.notna()
+        diff = ((a - b).abs() / a.abs()).where(both)
+        if (diff > price_rtol).any().any():
+            raise SeamError(f"OOS overlaps IS on {len(inside)} dates with different prices "
+                            f"(max rel diff {float(np.nanmax(diff.to_numpy())):.2e})")
+        log.warning("OOS overlaps IS on %d identical dates (%s -> %s); dropped from OOS",
+                    len(inside), inside[0].date(), inside[-1].date())
+        px_oos = px_oos.loc[px_oos.index > is_last]
+        if px_oos.empty:
+            raise SeamError("OOS file contains no dates after the IS period")
+    gap = int(np.busday_count((is_last + pd.Timedelta(days=1)).date(), px_oos.index[0].date()))
+    if gap > max_gap_weekdays:
+        raise SeamError(f"{gap} weekdays missing between IS end {is_last.date()} and OOS start "
+                        f"{px_oos.index[0].date()} (max {max_gap_weekdays})")
+    ff = load_fedfunds(is_path).combine_first(load_fedfunds(oos_path))
+    prices = pd.concat([px_is, px_oos])
+    returns = build_returns(prices, ff, rf_mode)
+    info.update(oos_first=px_oos.index[0], oos_last=px_oos.index[-1], n_oos_rows=len(px_oos),
+                overlap_dropped=len(inside), weekdays_between=gap,
+                oos_missing_prices=int(px_oos.isna().sum().sum()),
+                first_oos_return_gdx=float(returns.loc[px_oos.index[0], "Ret_GDX"]))
+    return prices, returns, info

@@ -222,6 +222,29 @@ def plot_monthly_entries(entries: dict[str, pd.Series], periods: dict, path) -> 
 
 
 # ---------------------------------------------------------------------------
+# Sensitivity tables
+# ---------------------------------------------------------------------------
+
+def exclude_years_table(nets: pd.DataFrame, years=(2008, 2020)) -> pd.DataFrame:
+    """Annualised net Sharpe and return with and without the given calendar years
+    (each on its own, and all together). Years absent from the data are skipped."""
+    present = [y for y in years if (nets.index.year == y).any()]
+    variants = {"all years": np.ones(len(nets), bool)}
+    for y in present:
+        variants[f"ex {y}"] = np.asarray(nets.index.year != y)
+    if len(present) > 1:
+        variants["ex " + " & ".join(map(str, present))] = ~np.isin(nets.index.year, present)
+    rows = {}
+    for name, keep in variants.items():
+        x = nets.loc[keep]
+        rows[(name, "Sharpe")] = x.mean() / x.std() * np.sqrt(252)
+        rows[(name, "ann. return")] = x.mean() * 252
+    out = pd.DataFrame(rows)
+    out.columns = pd.MultiIndex.from_tuples(out.columns)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # HTML
 # ---------------------------------------------------------------------------
 
