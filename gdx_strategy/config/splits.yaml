@@ -1,0 +1,22 @@
+# In-sample protocol. All workbook data is IS; it is split internally.
+#
+# P&L rows are assigned to a split by date. Positions carry across the boundary
+# (a trade opened in late 2016 earns its 2017 returns in validation), exactly as a
+# live deployment would. Signals in validation use the same rolling procedure,
+# with development data as warm-up history.
+
+development:
+  start: auto          # common signal start of the grid (first scored row is the next day)
+  end: 2016-12-31      # full grid is ranked here only
+
+validation:            # pseudo-OOS: shortlist only, evaluated once
+  start: 2017-01-01
+  end: 2021-12-31
+
+walk_forward:          # anchored: select on [dev start, Y-1], trade year Y
+  first_test_year: 2011
+  last_test_year: 2021
+
+# Every validation evaluation is appended here. Re-evaluating a different
+# shortlist requires an explicit, logged reason.
+validation_log: results/validation_log.jsonl
