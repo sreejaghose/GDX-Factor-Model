@@ -6,3 +6,4 @@ pyyaml>=6.0
 joblib>=1.3
 openpyxl>=3.1
 pytest>=7.0
+numba>=0.58  # optional: backtest loop falls back to plain Python
