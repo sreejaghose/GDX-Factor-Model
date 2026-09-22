@@ -27,3 +27,19 @@ reference_only:            # reported for context, never selectable
 
 report:
   cost_bps: [0.0, 2.0, 5.0]   # finalists are shown gross and at these costs
+
+selection:                   # applied on development (net of fixed.cost_bps)
+  min_pct_months_with_entry: 1.0   # 100% of calendar months have >= 1 new entry
+  near_miss_pct_months: 0.95       # printed for context only
+  min_entries: 150                 # over the development period ...
+  min_entries_ref_days: 2167       # ... scaled pro rata for other window lengths
+  min_pct_years_positive: 0.70
+  require_positive_halves: true    # net Sharpe > 0 in both halves
+  require_positive_ex_top_days: true
+  shortlist_size: 10
+  n_alternates: 2
+  stats:
+    seed: 20240601
+    placebo_sims: 1000
+    bootstrap_reps: 2000
+    bootstrap_block: 10            # mean block length (days), stationary bootstrap
