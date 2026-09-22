@@ -62,3 +62,23 @@ def test_stage2_forecast_uses_no_future_data():
     now = predictive_regression(z, r_t, min_obs=250)
     assert now["gamma"].iloc[t] != base["gamma"].iloc[t]
     np.testing.assert_array_equal(now["gamma"].iloc[:t].to_numpy(), base["gamma"].iloc[:t].to_numpy())
+
+
+def test_positions_and_pnl_use_no_future_data():
+    from src.backtest import backtest
+    from src.forecast import predictive_regression
+
+    df = _returns(n=700)
+
+    def run(d):
+        z = residual_score(rolling_residuals(d, ("SPY", "GLD"), 60), 2)
+        fc = predictive_regression(z, d["ExRet_GDX"], min_obs=250)
+        return backtest(fc, d["ExRet_GDX"], k=1.0, H=3, policy="B_reset_flip").daily
+
+    t = 500
+    shocked = df.copy()
+    shocked.iloc[t + 1:] = np.random.default_rng(5).normal(0, 0.05, shocked.iloc[t + 1:].shape)
+    a, b = run(df), run(shocked)
+    assert (a["pos"].iloc[:t + 1] != 0).any()
+    np.testing.assert_array_equal(a["pos"].iloc[:t + 1], b["pos"].iloc[:t + 1])
+    np.testing.assert_array_equal(a["net"].iloc[:t + 1], b["net"].iloc[:t + 1])  # P&L through t
