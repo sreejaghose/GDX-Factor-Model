@@ -217,6 +217,11 @@ def run(args) -> dict:
     labels = {c: f"{configs.loc[c, 'role'].upper()} {c}" for c in configs.index}
     bh = pd.Series(np.nan_to_num(g.exret[oos]), index=g.dates[oos])
     f5 = rp.plot_equity({labels[c]: nets[c] for c in configs.index}, bh, oos_period, figs / "equity.png")
+    growth = rp.growth_paths(nets.rename(columns=labels), returns)
+    growth.to_csv(out / "oos_growth_of_1000.csv")
+    gtab = rp.growth_table(growth)
+    f5b = rp.plot_growth(growth, labels[prim], oos_period, figs / "growth_of_1000.png",
+                         f"OOS: growth of $1,000 invested {growth.index[0].date()} (net of {cost:g} bps)")
     months = g.dates[closes_oos].to_period("M")
     ent = {}
     for c in configs.index:
@@ -257,6 +262,7 @@ Heatmaps below are diagnostics over the OOS period and were not used to change a
         ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3)),
         ("4. Stage-1 rolling betas", rp.img_tag(f4)),
         ("5. Equity curve and drawdown (OOS)", rp.img_tag(f5)),
+        ("Growth of $1,000 (OOS)", rp.img_tag(f5b) + rp.table_html(gtab, 2)),
         ("6. Monthly entry counts (OOS)", rp.img_tag(f6)),
         ("7. Yearly net returns (OOS)", rp.table_html(ytab)),
     ]

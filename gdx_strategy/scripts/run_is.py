@@ -355,6 +355,14 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
     bh = pd.Series(np.nan_to_num(g.exret[full]), index=g.dates[full])
     f5 = rp.plot_equity({labels[c]: nets[c] for c in finalists}, bh, periods, figs / "equity.png")
 
+    # 5b growth of $1,000 (fully funded: cash earns RF + 1x overlay)
+    growth = rp.growth_paths(nets.rename(columns=labels), returns)
+    growth.to_csv(RESULTS / "growth_of_1000.csv")
+    gtab = rp.growth_table(growth, periods)
+    f5b = rp.plot_growth(growth, labels[finalists[0]], periods, figs / "growth_of_1000.png",
+                         f"Growth of $1,000 invested {growth.index[0].date()}: frozen primary vs buy-and-hold GDX "
+                         "(net of 2 bps, cash collateral earns Fed Funds)")
+
     # 6 monthly entries
     cm = closes(full)
     months = g.dates[cm].to_period("M")
@@ -484,6 +492,11 @@ validation {periods['validation'][0].date()} → {periods['validation'][1].date(
         ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3)),
         ("4. Stage-1 rolling betas", rp.img_tag(f4)),
         ("5. Equity curve and drawdown", rp.img_tag(f5)),
+        ("Growth of $1,000", rp.img_tag(f5b) + rp.table_html(gtab, 2) +
+         "<p class='muted'>Fully funded: the $1,000 earns the Fed Funds rate and carries the strategy's 1x "
+         "long/short GDX position; daily compounding; net of 2 bps per unit traded; no short-borrow fee or "
+         "taxes. The development segment is in-sample (the config was selected on it), so only the "
+         "validation segment is a fair out-of-selection view.</p>"),
         ("6. Monthly entry counts", rp.img_tag(f6)),
         ("7. Yearly net returns (finalists)", rp.table_html(ytab)),
         ("Finalists at 0 / 2 / 5 bps (gross vs net)", f"<p>{cost_text}</p>" + rp.table_html(costs)),

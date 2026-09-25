@@ -222,6 +222,95 @@ def plot_monthly_entries(entries: dict[str, pd.Series], periods: dict, path) -> 
 
 
 # ---------------------------------------------------------------------------
+# Growth of an investment
+# ---------------------------------------------------------------------------
+
+INK, INK_MUTED, GRID = "#1d1d1f", "#6b6b66", "#e4e4e0"
+SERIES = {"strategy": "#2a78d6", "benchmark": "#eb6834", "cash": "#8a8a85"}
+
+
+def growth_paths(strategy_net: pd.DataFrame, returns: pd.DataFrame, start_value: float = 1000.0) -> pd.DataFrame:
+    """Dollar value of ``start_value`` invested at the first date of ``strategy_net``.
+
+    Strategies are fully funded: the capital sits in cash earning the risk-free rate
+    and carries the 1x long/short GDX overlay, so the daily total return is
+    RF/252 + net excess return. Also: buy-and-hold GDX and cash. Daily compounding;
+    no borrow fee on shorts, no taxes.
+    """
+    idx = strategy_net.index
+    rf = (returns["RF_annual"].reindex(idx) / 252).fillna(0.0)
+    total = strategy_net.add(rf, axis=0)
+    total["Buy & hold GDX"] = returns["Ret_GDX"].reindex(idx).fillna(0.0)
+    total["Cash (Fed Funds)"] = rf
+    values = start_value * (1 + total).cumprod()
+    # invested at the close before the first scored day, so that day's return counts
+    pos = returns.index.get_loc(idx[0])
+    t0 = returns.index[pos - 1] if pos > 0 else idx[0] - pd.Timedelta(days=1)
+    start = pd.DataFrame(start_value, index=pd.DatetimeIndex([t0], name=idx.name), columns=values.columns)
+    return pd.concat([start, values])
+
+
+def growth_table(values: pd.DataFrame, periods: dict | None = None) -> pd.DataFrame:
+    """Start / end values, CAGR and worst peak-to-trough drop of each path."""
+    rows = {}
+    years = (values.index[-1] - values.index[0]).days / 365.25
+    for c in values:
+        v = values[c]
+        row = {"start ($)": v.iloc[0]}
+        for name, (_, b) in (periods or {}).items():
+            row[f"end of {name} ($)"] = v.loc[:b].iloc[-1]
+        row.update({"final ($)": v.iloc[-1], "CAGR": (v.iloc[-1] / v.iloc[0]) ** (1 / years) - 1,
+                    "worst drawdown": (v / v.cummax() - 1).min()})
+        rows[c] = row
+    return pd.DataFrame(rows).T
+
+
+def plot_growth(values: pd.DataFrame, strategy_col: str, periods: dict, path, title: str,
+                start_value: float = 1000.0) -> Path:
+    """Growth of $start_value (log scale, dollar ticks) with a drawdown panel below."""
+    import matplotlib.ticker as mt
+
+    style = {strategy_col: dict(color=SERIES["strategy"], lw=2.0),
+             "Buy & hold GDX": dict(color=SERIES["benchmark"], lw=2.0),
+             "Cash (Fed Funds)": dict(color=SERIES["cash"], lw=1.5, ls="--")}
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(12, 7.2), sharex=True,
+                                 gridspec_kw={"height_ratios": [3, 1.2], "hspace": 0.08})
+    for ax in (a1, a2):
+        for name, (a, b) in periods.items():
+            ax.axvspan(a, b, color=DEV_COLOR if name == "development" else VAL_COLOR, alpha=0.45, lw=0, zorder=0)
+        ax.grid(axis="y", color=GRID, lw=0.8, zorder=1)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        for sp in ("left", "bottom"):
+            ax.spines[sp].set_color(GRID)
+        ax.tick_params(colors=INK_MUTED, labelsize=9)
+    last = values.index[-1]
+    for col, kw in style.items():
+        v = values[col]
+        a1.plot(v.index, v, zorder=3, label=col, **kw)
+        a1.annotate(f"{col.split(' ')[0] if col == strategy_col else col}  ${v.iloc[-1]:,.0f}",
+                    xy=(last, v.iloc[-1]), xytext=(8, 0), textcoords="offset points", va="center",
+                    fontsize=9, color=INK)
+        dd = v / v.cummax() - 1
+        a2.plot(dd.index, dd * 100, zorder=3, **kw)
+    a1.axhline(start_value, color=INK_MUTED, lw=0.8, zorder=2)
+    a1.set_yscale("log")
+    a1.yaxis.set_major_locator(mt.FixedLocator([250, 500, 1000, 2000, 5000, 10000, 20000, 50000]))
+    a1.yaxis.set_major_formatter(mt.FuncFormatter(lambda y, _: f"${y:,.0f}"))
+    a1.yaxis.set_minor_formatter(mt.NullFormatter())
+    a1.set_ylabel(f"value of ${start_value:,.0f} (log scale)", color=INK_MUTED)
+    a1.set_title(title, loc="left", color=INK, fontsize=12, pad=22)
+    for name, (a, b) in periods.items():
+        a1.text(a + (b - a) / 2, 1.01, name, transform=a1.get_xaxis_transform(), ha="center", va="bottom",
+                fontsize=9, color=INK_MUTED)
+    a1.legend(loc="upper left", frameon=False, fontsize=9)
+    a2.set_ylabel("below peak (%)", color=INK_MUTED)
+    a2.axhline(0, color=INK_MUTED, lw=0.8)
+    a1.set_xlim(values.index[0], last + (last - values.index[0]) * 0.13)
+    return _save(fig, path)
+
+
+# ---------------------------------------------------------------------------
 # Sensitivity tables
 # ---------------------------------------------------------------------------
 
