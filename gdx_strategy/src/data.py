@@ -20,14 +20,14 @@ log = logging.getLogger(__name__)
 PRICES_SHEET = "Prices (input)"
 FEDFUNDS_SHEET = "FedFunds (input)"
 HEADER_ROW = 1  # 0-based: header is on Excel row 2
-ASSETS = ["SPY", "IAU", "GLD", "TLT", "GDX"]  # GDXJ dropped
+ASSETS = ["SPY", "IAU", "GLD", "TLT", "GDX", "GDXJ"]  # GDXJ is blank/0 before its Nov-2009 inception -> NaN
 TRADING_DAYS = 252
 
 RFMode = Literal["same_month", "prior_month"]
 
 
 def load_prices(path: str | Path) -> pd.DataFrame:
-    """Daily closes indexed by date; 0 / blank -> NaN; GDXJ dropped."""
+    """Daily closes indexed by date; 0 / blank -> NaN (e.g. GDXJ before inception)."""
     df = pd.read_excel(path, sheet_name=PRICES_SHEET, header=HEADER_ROW)
     df = df.rename(columns=lambda c: str(c).strip())
     df = df.dropna(subset=["Date"])

@@ -17,11 +17,12 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-FACTORS = ["SPY", "IAU", "GLD", "TLT"]
+WORKBOOK_FACTORS = ["SPY", "IAU", "GLD", "TLT"]   # the workbook sweep's factor pool
+FACTORS = WORKBOOK_FACTORS + ["GDXJ"]             # every factor the code accepts (canonical order)
 
 
-def factor_subsets(factors: list[str] = FACTORS) -> list[tuple[str, ...]]:
-    """All non-empty subsets, in the canonical SPY, IAU, GLD, TLT order."""
+def factor_subsets(factors: list[str] = WORKBOOK_FACTORS) -> list[tuple[str, ...]]:
+    """All non-empty subsets of ``factors``, in canonical order."""
     return [c for n in range(1, len(factors) + 1) for c in itertools.combinations(factors, n)]
 
 
@@ -57,9 +58,28 @@ def full_sample_ols(returns: pd.DataFrame, factors: tuple[str, ...] | list[str],
     return out
 
 
-def full_sample_sweep(returns: pd.DataFrame, target: str = "GDX") -> pd.DataFrame:
-    """``full_sample_ols`` for every factor subset, one row per subset."""
-    return pd.DataFrame([full_sample_ols(returns, s, target) for s in factor_subsets()])
+def full_sample_sweep(returns: pd.DataFrame, target: str = "GDX", factors: list[str] = WORKBOOK_FACTORS,
+                      common_sample: bool = False) -> pd.DataFrame:
+    """``full_sample_ols`` for every subset of ``factors``, one row per subset.
+
+    common_sample=True fits every subset on the same rows (where the target and all
+    of ``factors`` exist), which is required for AIC/BIC to be comparable across
+    subsets; otherwise each subset uses all rows where its own series exist.
+    """
+    if common_sample:
+        cols = [f"ExRet_{c}" for c in [target, *factors]]
+        returns = returns.loc[returns[cols].notna().all(axis=1)]
+    return pd.DataFrame([full_sample_ols(returns, s, target) for s in factor_subsets(factors)])
+
+
+def collinearity(returns: pd.DataFrame, factors) -> dict:
+    """Condition number of the standardised factor matrix and the largest VIF."""
+    X = returns[[f"ExRet_{f}" for f in factors]].dropna()
+    if X.shape[1] == 1:
+        return {"cond_number": 1.0, "max_vif": 1.0}
+    Z = ((X - X.mean()) / X.std()).to_numpy()
+    corr_inv = np.linalg.inv(np.corrcoef(Z, rowvar=False))
+    return {"cond_number": float(np.linalg.cond(Z)), "max_vif": float(np.diag(corr_inv).max())}
 
 
 # ---------------------------------------------------------------------------
@@ -67,14 +87,20 @@ def full_sample_sweep(returns: pd.DataFrame, target: str = "GDX") -> pd.DataFram
 # ---------------------------------------------------------------------------
 
 def check_factor_set(factors) -> tuple[str, ...]:
-    """Validate and canonicalise a factor set (never IAU and GLD together)."""
+    """Validate and canonicalise a factor set.
+
+    Whether IAU and GLD (near-duplicates) may appear together is a config-level
+    rule enforced by grid.load_grid; see has_iau_and_gld.
+    """
     factors = tuple(factors)
     unknown = set(factors) - set(FACTORS)
     if unknown or not factors or len(set(factors)) != len(factors):
         raise ValueError(f"Invalid factor set {factors!r}")
-    if "IAU" in factors and "GLD" in factors:
-        raise ValueError("IAU and GLD are near-duplicates; never use both in one model")
     return tuple(f for f in FACTORS if f in factors)
+
+
+def has_iau_and_gld(factors) -> bool:
+    return "IAU" in factors and "GLD" in factors
 
 
 def rolling_residuals(returns: pd.DataFrame, factors, lookback: int, target: str = "GDX",
@@ -122,7 +148,11 @@ def rolling_residuals(returns: pd.DataFrame, factors, lookback: int, target: str
 
     ok = (n >= min_obs) & valid[t]
     XtX_safe = np.where(ok[:, None, None], XtX, np.eye(p))
-    beta = np.linalg.solve(XtX_safe, np.where(ok[:, None], Xty, 0.0)[:, :, None])[:, :, 0]
+    rhs = np.where(ok[:, None], Xty, 0.0)[:, :, None]
+    try:
+        beta = np.linalg.solve(XtX_safe, rhs)[:, :, 0]
+    except np.linalg.LinAlgError:  # an exactly singular window (e.g. duplicate factors): least squares
+        beta = (np.linalg.pinv(XtX_safe) @ rhs)[:, :, 0]
     ssr = np.maximum(yty - np.einsum("ij,ij->i", beta, Xty), 0.0)
     sigma = np.sqrt(ssr / np.maximum(n - p, 1))
     e = y[t] - np.einsum("ij,ij->i", X[t], beta)

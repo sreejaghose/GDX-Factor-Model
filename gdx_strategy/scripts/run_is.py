@@ -243,7 +243,7 @@ def validation_and_freeze(args, cfg, splits, returns, workbook, g, ranked, short
     log.info("Frozen: primary %s; alternates %s (status: %s)", chosen[0], chosen[1:], status)
 
     # anchored walk-forward of the selection rule (diagnostic)
-    wf_cfg = splits["walk_forward"]
+    wf_cfg = {**splits["walk_forward"], **cfg.get("walk_forward", {})}  # a grid may start later
     wf = walk_forward(g, make_selection_rule(returns, cfg), wf_cfg["first_test_year"],
                       wf_cfg["last_test_year"], cost)
     _fmt_table(wf["years"]).to_csv(RESULTS / "walk_forward.csv")
@@ -272,7 +272,7 @@ SECTION8 = ["sharpe", "sharpe_gross", "ann_return", "ann_vol", "sortino", "max_d
             "beta_SPY", "corr_GLD", "beta_GLD"]
 
 
-def grid_results_table(g, returns, masks, cost) -> pd.DataFrame:
+def grid_results_table(g, returns, masks, cost, cfg_yearly_periods: bool = True) -> pd.DataFrame:
     """Every config (incl. D reference) x period: development, validation, full, each year."""
     ValidationGate(load_splits(ROOT / "config" / "splits.yaml")["validation_log"]).check_and_log(
         list(g.configs.index),
@@ -280,8 +280,9 @@ def grid_results_table(g, returns, masks, cost) -> pd.DataFrame:
     full = masks["development"] | masks["validation"]
     periods = {"development": (masks["development"], True), "validation": (masks["validation"], True),
                "full": (full, True)}
-    for y in sorted(set(g.dates[full].year)):
-        periods[str(y)] = (full & np.asarray(g.dates.year == y), False)
+    if cfg_yearly_periods:
+        for y in sorted(set(g.dates[full].year)):
+            periods[str(y)] = (full & np.asarray(g.dates.year == y), False)
     parts = []
     params = g.configs[PARAMS].assign(factors=g.configs["factors"].map("+".join))
     for name, (m, trades) in periods.items():
@@ -310,7 +311,7 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
     exret = returns["ExRet_GDX"]
 
     # parquet: every config x period
-    gr = grid_results_table(g, returns, masks, cost)
+    gr = grid_results_table(g, returns, masks, cost, cfg.get("report", {}).get("yearly_periods", True))
     f32 = gr.select_dtypes("float64").columns
     gr[f32] = gr[f32].astype("float32")
     gr.to_parquet(RESULTS / "grid_results.parquet", compression="zstd", compression_level=9)

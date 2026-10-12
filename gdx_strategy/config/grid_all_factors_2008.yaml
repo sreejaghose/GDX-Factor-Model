@@ -1,0 +1,67 @@
+# EXPLORATION: every combination of SPY, IAU, GLD, TLT as GDX's factors (15 sets),
+# two-stage model, original evaluation window (from 2008-05-23). IAU and GLD are
+# deliberately allowed together. Superset of config/grid.yaml (its 3 factor sets are
+# included unchanged), so its 10,800 configs are counted inside this grid's N.
+# Specified after the validation period was seen -> validation results are a logged
+# protocol deviation; judge on OOS only.
+
+grid:
+  factors:
+    - [SPY]
+    - [IAU]
+    - [GLD]
+    - [TLT]
+    - [SPY, IAU]
+    - [SPY, GLD]
+    - [SPY, TLT]
+    - [IAU, GLD]
+    - [IAU, TLT]
+    - [GLD, TLT]
+    - [SPY, IAU, GLD]
+    - [SPY, IAU, TLT]
+    - [SPY, GLD, TLT]
+    - [IAU, GLD, TLT]
+    - [SPY, IAU, GLD, TLT]
+  lookback: [20, 40, 60, 120, 250]
+  m: [1, 2, 3, 5]
+  k: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+  H: [1, 2, 3, 5, 10]
+  policy: [A_run_out, B_reset_flip, C_reset_flat]
+  direction_mode: [estimated, reversion]
+
+fixed:
+  model: two_stage
+  allow_iau_with_gld: true
+  rf_mode: prior_month
+  min_edge_bps: 0.0
+  cost_bps: 2.0
+  stage1_min_obs_frac: 0.9
+  stage2_window: null
+  stage2_min_obs: 250
+  prior_trials: 0              # the original 10,800 are a subset of this grid
+  protocol_note: >-
+    All-combinations exploration (no GDXJ, original 2008 window), specified after
+    validation was seen; validation results are a logged deviation, judge on OOS only.
+
+reference_only:
+  policy: [D_stack_2x]
+
+report:
+  cost_bps: [0.0, 2.0, 5.0]
+  yearly_periods: false        # keep grid_results.parquet to development / validation / full
+
+selection:                     # identical to the original grid
+  min_pct_months_with_entry: 1.0
+  near_miss_pct_months: 0.95
+  min_entries: 150
+  min_entries_ref_days: 2167   # scaled pro rata, so shorter windows need proportionally fewer entries
+  min_pct_years_positive: 0.70
+  require_positive_halves: true
+  require_positive_ex_top_days: true
+  shortlist_size: 10
+  n_alternates: 2
+  stats:
+    seed: 20240601
+    placebo_sims: 1000
+    bootstrap_reps: 2000
+    bootstrap_block: 10

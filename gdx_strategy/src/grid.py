@@ -23,7 +23,7 @@ import pandas as pd
 import yaml
 
 from src.backtest import POLICIES, build_signal, run_engine
-from src.factor_model import check_factor_set
+from src.factor_model import check_factor_set, has_iau_and_gld
 from src.forecast import ForecastCache, forecast_cache, signal_live
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,11 @@ def load_grid(path: str | Path) -> dict:
     if missing:
         raise ValueError(f"grid.yaml missing keys: {missing}")
     g["factors"] = [check_factor_set(f) for f in g["factors"]]
+    if not cfg.get("fixed", {}).get("allow_iau_with_gld", False):
+        bad = [f for f in g["factors"] if has_iau_and_gld(f)]
+        if bad:
+            raise ValueError(f"IAU and GLD are near-duplicates and may not share a model {bad}; "
+                             "set fixed.allow_iau_with_gld: true to test them deliberately")
     for p in g["policy"] + cfg.get("reference_only", {}).get("policy", []):
         if p not in POLICIES:
             raise ValueError(f"Unknown policy {p!r}")

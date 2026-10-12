@@ -42,9 +42,9 @@ def oos_files(is_workbook, tmp_path_factory):
     ok = d / "oos_ok.xlsx"
     write_workbook(ok, new, ff)
     overlap = d / "oos_overlap.xlsx"
-    write_workbook(overlap, pd.concat([px.iloc[-3:].assign(GDXJ=1.0), new]), ff)
+    write_workbook(overlap, pd.concat([px.iloc[-3:], new]), ff)
     bad_overlap = d / "oos_bad_overlap.xlsx"
-    tweaked = px.iloc[-3:].assign(GDXJ=1.0)
+    tweaked = px.iloc[-3:].copy()
     tweaked.iloc[1, tweaked.columns.get_loc("GDX")] *= 1.01
     write_workbook(bad_overlap, pd.concat([tweaked, new]), ff)
     gap = d / "oos_gap.xlsx"

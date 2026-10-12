@@ -65,10 +65,28 @@ def test_missing_data_is_skipped_not_propagated():
     assert np.isfinite(r["e"].iloc[160])
 
 
-def test_rejects_iau_with_gld():
-    with pytest.raises(ValueError):
-        check_factor_set(("SPY", "IAU", "GLD"))
+def test_factor_set_canonical_order_and_iau_gld_rule(tmp_path):
+    import yaml
+    from src.grid import load_grid
     assert check_factor_set(("GLD", "SPY")) == ("SPY", "GLD")
+    assert check_factor_set(("GDXJ", "IAU", "GLD")) == ("IAU", "GLD", "GDXJ")
+    with pytest.raises(ValueError):
+        check_factor_set(("GDX",))  # the target is never a factor
+    base = dict(lookback=[20], m=[1], k=[1.0], H=[1], policy=["A_run_out"], direction_mode=["reversion"])
+    p = tmp_path / "g.yaml"
+    p.write_text(yaml.safe_dump({"grid": {**base, "factors": [["SPY", "IAU", "GLD"]]}, "fixed": {}}))
+    with pytest.raises(ValueError):           # default: IAU+GLD refused
+        load_grid(p)
+    p.write_text(yaml.safe_dump({"grid": {**base, "factors": [["SPY", "IAU", "GLD"]]},
+                                 "fixed": {"allow_iau_with_gld": True}}))
+    assert load_grid(p)["grid"]["factors"] == [("SPY", "IAU", "GLD")]
+
+
+def test_duplicate_factor_columns_do_not_crash():
+    df = synthetic_returns()
+    df["ExRet_IAU"] = df["ExRet_GLD"]          # perfectly collinear pair
+    r = rolling_residuals(df, ("IAU", "GLD"), 60)
+    assert np.isfinite(r["e"].iloc[100:]).all()
 
 
 def test_cache_returns_same_object():

@@ -63,3 +63,27 @@ def test_headline_numbers(python_sweep):
     assert t["t_TLT"] == pytest.approx(2.7, abs=0.05)
     # IAU is redundant alongside GLD
     assert abs(python_sweep.loc["SPY+IAU+GLD", "t_IAU"]) < 1.5
+
+
+@pytest.fixture(scope="module")
+def excel_sweep_gdxj(is_workbook) -> pd.DataFrame:
+    s = pd.read_excel(is_workbook, sheet_name=SWEEP_SHEET, header=SWEEP_HEADER_ROW)
+    return s[s["Vehicle"] == "GDXJ"].set_index("Factors")
+
+
+@pytest.fixture(scope="module")
+def python_sweep_gdxj(is_workbook) -> pd.DataFrame:
+    _, returns = load_dataset(is_workbook, rf_mode="same_month", check_adjusted=False)
+    return full_sample_sweep(returns, target="GDXJ").set_index("Factors")
+
+
+@pytest.mark.parametrize("subset", ["+".join(s) for s in factor_subsets()])
+def test_gdxj_subset_matches_excel(subset, excel_sweep_gdxj, python_sweep_gdxj):
+    """GDXJ (loaded since the all-combinations sweep) also reproduces the workbook."""
+    xl, py = excel_sweep_gdxj.loc[subset], python_sweep_gdxj.loc[subset]
+    assert py["N"] == xl["N"] == 3055
+    for col in COMPARE:
+        x = xl[col]
+        if pd.isna(x):
+            continue
+        assert abs(py[col] - x) <= TOL, f"GDXJ {subset}: {col} python={py[col]!r} excel={x!r}"
