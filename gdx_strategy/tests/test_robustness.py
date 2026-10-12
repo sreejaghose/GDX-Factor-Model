@@ -114,3 +114,25 @@ def test_statistical_checks_consistent_with_grid():
     flip = GridResult(cfg, dates, r, -pos, new, dates[5], 1).net_returns(5.0, mask=mask).iloc[:, 0]
     assert out["sign_flip_sharpe"] == pytest.approx(flip.mean() / flip.std() * np.sqrt(252))
     assert 0 <= out["placebo_percentile"] <= 100 and out["placebo_n_trades"] > 50
+
+
+def test_use_hard_filters_switch(is_workbook):
+    from conftest import ROOT
+    from src.data import load_dataset
+    from src.grid import load_grid, run_grid
+    from src.robustness import rank_configs, uses_hard_filters
+    from src.splits import load_splits, split_masks
+
+    cfg = load_grid(ROOT / "config" / "grid.yaml")
+    cfg["grid"].update(factors=[("GLD",)], lookback=[20, 60], m=[1], k=[0.5, 1.5], H=[2, 10])
+    _, r = load_dataset(is_workbook, rf_mode=cfg["fixed"]["rf_mode"], check_adjusted=False)
+    g = run_grid(r, cfg)
+    dev = split_masks(g, load_splits(ROOT / "config" / "splits.yaml"))["development"]
+    on = rank_configs(g, r, dev, cfg)
+    assert uses_hard_filters(cfg["selection"])
+    assert on["n_failed"].is_monotonic_increasing                      # filters gate the order
+    cfg["selection"]["use_hard_filters"] = False
+    off = rank_configs(g, r, dev, cfg)
+    assert off["nbhd_median"].is_monotonic_decreasing                  # pure neighbourhood ranking
+    assert set(off.columns) >= {"passes", "n_failed"}                  # still reported
+    pd.testing.assert_frame_equal(on.sort_index()[["sharpe", "passes"]], off.sort_index()[["sharpe", "passes"]])

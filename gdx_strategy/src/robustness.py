@@ -55,6 +55,11 @@ def hard_filters(table: pd.DataFrame, configs: pd.DataFrame, sel: dict) -> pd.Da
     return f
 
 
+def uses_hard_filters(sel: dict) -> bool:
+    """Whether the hard filters gate selection (they are always computed and reported)."""
+    return bool(sel.get("use_hard_filters", True))
+
+
 def filter_funnel(filters: pd.DataFrame) -> pd.DataFrame:
     """How many configs survive each filter, applied cumulatively in order."""
     alive = pd.Series(True, index=filters.index)
@@ -121,8 +126,10 @@ def rank_configs(grid: GridResult, returns: pd.DataFrame, mask: np.ndarray, grid
                  with_trades: bool = False) -> pd.DataFrame:
     """Metrics + filters + neighbourhood score for every selectable config, ranked.
 
-    Ranking: passing configs first, then fewest failed filters; within that,
-    neighbourhood median Sharpe (desc), then simplicity.
+    Ranking (selection.use_hard_filters, default true): passing configs first, then
+    fewest failed filters; within that, neighbourhood median Sharpe (desc), then
+    simplicity. With use_hard_filters: false the filters are still computed and
+    reported but do not affect the ranking.
     """
     sel = grid_cfg["selection"]
     ids = grid.configs.index[grid.configs["policy"] != "D_stack_2x"]
@@ -132,8 +139,10 @@ def rank_configs(grid: GridResult, returns: pd.DataFrame, mask: np.ndarray, grid
     nb = neighbourhood_scores(t["sharpe"], grid.configs, grid_cfg["grid"])
     df = pd.concat([grid.configs.loc[ids], t, f, nb,
                     simplicity_key(grid.configs.loc[ids]).drop(columns="H")], axis=1)
-    df = df.sort_values(["n_failed", "nbhd_median", "n_factors", "H", "policy_rank"],
-                        ascending=[True, False, True, True, True])
+    keys, asc = ["nbhd_median", "n_factors", "H", "policy_rank"], [False, True, True, True]
+    if uses_hard_filters(sel):
+        keys, asc = ["n_failed", *keys], [True, *asc]
+    df = df.sort_values(keys, ascending=asc)
     df["rank"] = np.arange(1, len(df) + 1)
     df.attrs = {}
     return df
@@ -144,7 +153,7 @@ def make_selection_rule(returns: pd.DataFrame, grid_cfg: dict):
     def rule(grid: GridResult, mask: np.ndarray) -> str:
         ranked = rank_configs(grid, returns, mask, grid_cfg)
         top = ranked.iloc[0]
-        if not top["passes"]:
+        if uses_hard_filters(grid_cfg["selection"]) and not top["passes"]:
             log.warning("No config passes all hard filters on window ending %s; taking best with "
                         "%d failed filter(s)", grid.dates[mask][-1].date(), int(top["n_failed"]))
         return top.name

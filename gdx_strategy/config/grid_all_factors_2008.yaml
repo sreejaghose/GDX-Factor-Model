@@ -3,7 +3,8 @@
 # deliberately allowed together. Superset of config/grid.yaml (its 3 factor sets are
 # included unchanged), so its 10,800 configs are counted inside this grid's N.
 # Specified after the validation period was seen -> validation results are a logged
-# protocol deviation; judge on OOS only.
+# protocol deviation; judge on OOS only. Hard filters disabled at the user's request
+    (reported, not applied).
 
 grid:
   factors:
@@ -50,7 +51,8 @@ report:
   cost_bps: [0.0, 2.0, 5.0]
   yearly_periods: false        # keep grid_results.parquet to development / validation / full
 
-selection:                     # identical to the original grid
+selection:                     # same thresholds as the original grid, but NOT applied:
+  use_hard_filters: false      # ranked purely by neighbourhood score; filters reported only
   min_pct_months_with_entry: 1.0
   near_miss_pct_months: 0.95
   min_entries: 150

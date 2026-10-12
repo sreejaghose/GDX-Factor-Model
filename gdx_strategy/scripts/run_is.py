@@ -38,7 +38,7 @@ from src.factor_model import full_sample_ols  # noqa: E402
 from src.forecast import forecast_cache  # noqa: E402
 from src.metrics import MIN_DAYS_PER_MONTH, grid_metrics  # noqa: E402
 from src import report as rp  # noqa: E402
-from src.robustness import (FILTERS, filter_funnel, hard_filters, make_selection_rule,  # noqa: E402
+from src.robustness import (FILTERS, filter_funnel, hard_filters, make_selection_rule, uses_hard_filters,  # noqa: E402
                             rank_configs, simplicity_key, statistical_checks)
 from src.splits import (ValidationGate, evaluate_validation, load_splits, split_masks,  # noqa: E402
                         walk_forward)
@@ -119,9 +119,14 @@ def development(args, cfg, splits, returns, workbook):
     log.info("Near-misses (pass all but the monthly filter, >= %.0f%% months): %d",
              100 * sel["near_miss_pct_months"], len(near))
 
-    passing = ranked[ranked["passes"]]
-    if passing.empty:
-        raise SystemExit("No config passes the development hard filters; stop and revisit.")
+    if uses_hard_filters(sel):
+        passing = ranked[ranked["passes"]]
+        if passing.empty:
+            raise SystemExit("No config passes the development hard filters; stop and revisit.")
+    else:
+        log.info("Hard filters DISABLED (selection.use_hard_filters: false): shortlist = top by "
+                 "neighbourhood score; filters are reported only.")
+        passing = ranked
     short = passing.head(sel["shortlist_size"]).copy()
 
     # statistical checks on the shortlist
@@ -164,20 +169,27 @@ def validation_and_freeze(args, cfg, splits, returns, workbook, g, ranked, short
     vtab = vtab.join(simplicity_key(g.configs.loc[ids]).drop(columns="H"))
     # composite: validation Sharpe rank + development neighbourhood rank; ties -> simplicity
     vtab["composite"] = vtab["sharpe"].rank(ascending=False) + vtab["dev_nbhd_median"].rank(ascending=False)
-    vtab = vtab.sort_values(["n_failed", "composite", "n_factors", "H", "policy_rank"])
+    filters_on = uses_hard_filters(sel)
+    vtab = vtab.sort_values((["n_failed"] if filters_on else []) + ["composite", "n_factors", "H", "policy_rank"])
     _fmt_table(vtab).to_csv(RESULTS / "validation_shortlist.csv")
     log.info("Validation (shortlist only):\n%s",
              vtab[["sharpe", "n_entries", "pct_months_with_entry", "pct_years_positive",
                    "sharpe_first_half", "sharpe_second_half", "ann_return_ex_top1pct_days",
                    "n_failed", "composite"]].round(3).to_string())
 
-    status = "ok" if vtab["passes"].any() else "no_candidate_passed_validation_filters"
-    if status != "ok":
-        log.warning("No shortlisted config passes the hard filters on validation; freezing the best "
-                    "by (fewest failures, composite) and flagging it.")
-    chosen = list(vtab.index[: 1 + sel["n_alternates"]])
-    if status == "ok":
-        chosen = list(vtab.index[vtab["passes"]][: 1 + sel["n_alternates"]])
+    if not filters_on:
+        status = "hard_filters_disabled"
+        log.warning("Hard filters disabled: freezing the best by composite rank (validation Sharpe + "
+                    "development neighbourhood score) regardless of filter results.")
+        chosen = list(vtab.index[: 1 + sel["n_alternates"]])
+    else:
+        status = "ok" if vtab["passes"].any() else "no_candidate_passed_validation_filters"
+        if status != "ok":
+            log.warning("No shortlisted config passes the hard filters on validation; freezing the best "
+                        "by (fewest failures, composite) and flagging it.")
+        chosen = list(vtab.index[: 1 + sel["n_alternates"]])
+        if status == "ok":
+            chosen = list(vtab.index[vtab["passes"]][: 1 + sel["n_alternates"]])
 
     # reference: D_stack_2x variant of each chosen config
     def d_variant(cid):
@@ -471,12 +483,21 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
     vlog = pd.DataFrame(ValidationGate(splits["validation_log"]).entries())[
         ["timestamp", "evaluation_number", "n_configs", "shortlist_hash", "deviation", "reason"]]
     ok = frozen["status"] == "ok"
-    banner = (f'<div class="{"ok" if ok else "warn"}"><b>Status: {html_escape(frozen["status"])}.</b> '
-              + ("The primary passed every hard filter on development and validation."
-                 if ok else
-                 "No shortlisted config passed the hard filters on validation. The primary below is the "
-                 "best by fewest failures and composite rank, and does <b>not</b> meet the stated "
-                 "requirements; treat OOS results for it as a test, not a deployment.") + "</div>")
+    if frozen["status"] == "hard_filters_disabled":
+        failed = frozen["primary"]["validation"]["failed_filters"]
+        msg = ("Hard filters were <b>disabled</b> for this run: the shortlist is the top configs by "
+               "neighbourhood score and the primary is the best by validation Sharpe + neighbourhood rank. "
+               "Filter results are shown for information only; the primary "
+               + (f"fails <b>{', '.join(failed)}</b> on validation, so it does not meet every stated "
+                  "requirement (e.g. at least one trade per month)." if failed else
+                  "happens to pass all of them on validation."))
+    elif ok:
+        msg = "The primary passed every hard filter on development and validation."
+    else:
+        msg = ("No shortlisted config passed the hard filters on validation. The primary below is the "
+               "best by fewest failures and composite rank, and does <b>not</b> meet the stated "
+               "requirements; treat OOS results for it as a test, not a deployment.")
+    banner = f'<div class="{"ok" if ok else "warn"}"><b>Status: {html_escape(frozen["status"])}.</b> {msg}</div>'
     pv, pdv = prim["validation"], prim["development"]
     ck = prim["development_checks"]
     summary = f"""{banner}

@@ -57,7 +57,8 @@ fixed:
   prior_trials: 54000          # configs of grid_all_factors_2008.yaml already tried on this data
   protocol_note: >-
     All-combinations exploration incl. GDXJ on a common late window, specified after
-    validation was seen; validation results are a logged deviation, judge on OOS only.
+    validation was seen; validation results are a logged deviation, judge on OOS only. Hard filters disabled at the user's request
+    (reported, not applied).
 
 walk_forward:
   first_test_year: 2013        # needs at least a year of training inside the late window
@@ -69,7 +70,8 @@ report:
   cost_bps: [0.0, 2.0, 5.0]
   yearly_periods: false        # keep grid_results.parquet to development / validation / full
 
-selection:                     # identical to the original grid
+selection:                     # same thresholds as the original grid, but NOT applied:
+  use_hard_filters: false      # ranked purely by neighbourhood score; filters reported only
   min_pct_months_with_entry: 1.0
   near_miss_pct_months: 0.95
   min_entries: 150
