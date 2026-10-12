@@ -1,0 +1,45 @@
+# Parameter grid for the in-sample search.
+# Total configurations = product of the list lengths under `grid` (tracked in
+# results and used for the multiple-testing adjustment).
+
+grid:
+  factors:                 # Stage-1 factor set (never IAU with GLD)
+    - [GLD]                # simple benchmark
+    - [SPY, GLD]           # best BIC
+    - [SPY, GLD, TLT]      # best AIC
+  lookback: [20, 40, 60, 120, 250]   # L, Stage-1 rolling window (days)
+  m: [1, 2, 3, 5]                    # residual accumulation (days)
+  k: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]  # |z| entry threshold
+  H: [1, 2, 3, 5, 10]                # holding period / exit (days)
+  policy: [A_run_out, B_reset_flip, C_reset_flat]
+  direction_mode: [estimated, reversion]
+
+fixed:                     # not searched
+  rf_mode: prior_month     # no FEDFUNDS look-ahead
+  min_edge_bps: 0.0        # |r_hat| filter off in the grid
+  cost_bps: 2.0            # grid is ranked net of 2 bps per unit traded
+  stage1_min_obs_frac: 0.9
+  stage2_window: null      # null = expanding
+  stage2_min_obs: 250
+
+reference_only:            # reported for context, never selectable
+  policy: [D_stack_2x]
+
+report:
+  cost_bps: [0.0, 2.0, 5.0]   # finalists are shown gross and at these costs
+
+selection:                   # applied on development (net of fixed.cost_bps)
+  min_pct_months_with_entry: 1.0   # 100% of calendar months have >= 1 new entry
+  near_miss_pct_months: 0.95       # printed for context only
+  min_entries: 150                 # over the development period ...
+  min_entries_ref_days: 2167       # ... scaled pro rata for other window lengths
+  min_pct_years_positive: 0.70
+  require_positive_halves: true    # net Sharpe > 0 in both halves
+  require_positive_ex_top_days: true
+  shortlist_size: 10
+  n_alternates: 2
+  stats:
+    seed: 20240601
+    placebo_sims: 1000
+    bootstrap_reps: 2000
+    bootstrap_block: 10            # mean block length (days), stationary bootstrap

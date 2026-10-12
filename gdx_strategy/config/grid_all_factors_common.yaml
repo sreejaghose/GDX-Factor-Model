@@ -1,0 +1,88 @@
+# EXPLORATION: every combination of SPY, IAU, GLD, TLT, GDXJ as GDX's factors (31 sets),
+# two-stage model, ONE common evaluation window for all sets. GDXJ only trades from
+# Nov 2009, so the common start is when the slowest GDXJ model is live (~late 2011);
+# earlier data is warm-up only. IAU and GLD are deliberately allowed together.
+# Specified after the validation period was seen -> logged protocol deviation; DSR
+# counts this grid plus the 54,000 configs of grid_all_factors_2008.yaml.
+
+grid:
+  factors:
+    - [SPY]
+    - [IAU]
+    - [GLD]
+    - [TLT]
+    - [GDXJ]
+    - [SPY, IAU]
+    - [SPY, GLD]
+    - [SPY, TLT]
+    - [SPY, GDXJ]
+    - [IAU, GLD]
+    - [IAU, TLT]
+    - [IAU, GDXJ]
+    - [GLD, TLT]
+    - [GLD, GDXJ]
+    - [TLT, GDXJ]
+    - [SPY, IAU, GLD]
+    - [SPY, IAU, TLT]
+    - [SPY, IAU, GDXJ]
+    - [SPY, GLD, TLT]
+    - [SPY, GLD, GDXJ]
+    - [SPY, TLT, GDXJ]
+    - [IAU, GLD, TLT]
+    - [IAU, GLD, GDXJ]
+    - [IAU, TLT, GDXJ]
+    - [GLD, TLT, GDXJ]
+    - [SPY, IAU, GLD, TLT]
+    - [SPY, IAU, GLD, GDXJ]
+    - [SPY, IAU, TLT, GDXJ]
+    - [SPY, GLD, TLT, GDXJ]
+    - [IAU, GLD, TLT, GDXJ]
+    - [SPY, IAU, GLD, TLT, GDXJ]
+  lookback: [20, 40, 60, 120, 250]
+  m: [1, 2, 3, 5]
+  k: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+  H: [1, 2, 3, 5, 10]
+  policy: [A_run_out, B_reset_flip, C_reset_flat]
+  direction_mode: [estimated, reversion]
+
+fixed:
+  model: two_stage
+  allow_iau_with_gld: true
+  rf_mode: prior_month
+  min_edge_bps: 0.0
+  cost_bps: 2.0
+  stage1_min_obs_frac: 0.9
+  stage2_window: null
+  stage2_min_obs: 250
+  prior_trials: 54000          # configs of grid_all_factors_2008.yaml already tried on this data
+  protocol_note: >-
+    All-combinations exploration incl. GDXJ on a common late window, specified after
+    validation was seen; validation results are a logged deviation, judge on OOS only. Hard filters disabled at the user's request
+    (reported, not applied).
+
+walk_forward:
+  first_test_year: 2013        # needs at least a year of training inside the late window
+
+reference_only:
+  policy: [D_stack_2x]
+
+report:
+  cost_bps: [0.0, 2.0, 5.0]
+  yearly_periods: false        # keep grid_results.parquet to development / validation / full
+
+selection:                     # same thresholds as the original grid, but NOT applied:
+  use_hard_filters: false      # ranked purely by neighbourhood score; filters reported only
+  min_pct_months_with_entry: 1.0
+  near_miss_pct_months: 0.95
+  min_entries: 150
+  min_entries_ref_days: 2167   # scaled pro rata, so shorter windows need proportionally fewer entries
+  min_pct_years_positive: 0.70
+  require_positive_halves: true
+  require_positive_ex_top_days: true
+  shortlist_size: 10
+  n_alternates: 2
+  stats:
+    seed: 20240601
+    placebo_sims: 1000
+    bootstrap_reps: 2000
+    bootstrap_block: 10
