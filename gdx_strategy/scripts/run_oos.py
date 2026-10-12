@@ -210,10 +210,10 @@ def run(args) -> dict:
                        is_shade, figs / "gamma.png",
                        title="Stage-2 slope γ̂_t through IS (blue) and OOS (orange)")
     F = tuple(pc["factors"])
-    fs = full_sample_ols(returns.loc[:is_last], F)
+    fs = None if F == ("BEST_BIC",) else full_sample_ols(returns.loc[:is_last], F)
     f4 = rp.plot_rolling_betas({f"L={x}": rc.betas(F, x).loc[is_last - pd.Timedelta(days=400):]
                                 for x in sorted({pc["lookback"], 60, 250})},
-                               figs / "rolling_betas.png", full_sample={f"beta_{f}": fs[f"Beta_{f}"] for f in F},
+                               figs / "rolling_betas.png", full_sample=None if fs is None else {f"beta_{f}": fs[f"Beta_{f}"] for f in F},
                                title="Stage-1 rolling betas (last ~year of IS, then OOS); dashed = IS full-sample")
     nets = g.net_returns(cost, mask=oos)
     labels = {c: f"{configs.loc[c, 'role'].upper()} {c}" for c in configs.index}

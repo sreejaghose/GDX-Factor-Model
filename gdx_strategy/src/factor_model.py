@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,7 @@ import statsmodels.api as sm
 
 WORKBOOK_FACTORS = ["SPY", "IAU", "GLD", "TLT"]   # the workbook sweep's factor pool
 FACTORS = WORKBOOK_FACTORS + ["GDXJ"]             # every factor the code accepts (canonical order)
+DYNAMIC = "BEST_BIC"   # pseudo factor set: each day, the lowest-BIC model among all subsets of FACTORS
 
 
 def factor_subsets(factors: list[str] = WORKBOOK_FACTORS) -> list[tuple[str, ...]]:
@@ -93,6 +95,8 @@ def check_factor_set(factors) -> tuple[str, ...]:
     rule enforced by grid.load_grid; see has_iau_and_gld.
     """
     factors = tuple(factors)
+    if factors == (DYNAMIC,):
+        return factors
     unknown = set(factors) - set(FACTORS)
     if unknown or not factors or len(set(factors)) != len(factors):
         raise ValueError(f"Invalid factor set {factors!r}")
@@ -165,6 +169,54 @@ def rolling_residuals(returns: pd.DataFrame, factors, lookback: int, target: str
     return pd.DataFrame(out, index=returns.index, columns=cols)
 
 
+def rolling_best_bic(returns: pd.DataFrame, lookback: int, pool: list[str] = FACTORS, target: str = "GDX",
+                     min_obs_frac: float = 0.9) -> tuple[pd.DataFrame, list[str]]:
+    """Dynamic factor model: each day, fit every non-empty subset of ``pool`` on the window
+    [t-L, t-1] and use the one with the lowest BIC for day t's residual.
+
+    BIC_t = n ln(SSR/n) + p ln(n) on the window (Gaussian likelihood; the constants are
+    the same for every candidate). BIC is only comparable on identical rows, so on
+    each day only candidates fitted on the full row count (the maximum n among valid
+    fits) compete; e.g. GDXJ models are excluded until their window is complete.
+    The choice uses only the window, so it is known at the close of t-1.
+
+    Returns (frame, subset names). Frame columns: alpha, beta_<f> for every f in pool
+    (0 when f is not in the chosen model), e, sigma, n_obs, chosen (index into the
+    subset names), bic.
+    """
+    subsets = factor_subsets(pool)
+    names = ["+".join(s) for s in subsets]
+    fits = [rolling_residuals(returns, s, lookback, target, min_obs_frac) for s in subsets]
+    N = len(returns)
+    e = np.column_stack([f["e"].to_numpy() for f in fits])
+    sig = np.column_stack([f["sigma"].to_numpy() for f in fits])
+    n = np.column_stack([f["n_obs"].to_numpy() for f in fits])
+    p = np.array([len(s) + 1 for s in subsets], float)
+    ok = np.isfinite(e) & np.isfinite(sig)
+    with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # warm-up rows have no valid fit
+        ssr = np.maximum(sig ** 2 * (n - p[None, :]), 1e-300)
+        bic = n * np.log(ssr / n) + p[None, :] * np.log(n)
+        nmax = np.nanmax(np.where(ok, n, np.nan), axis=1)
+    eligible = ok & (n == nmax[:, None])
+    bic_e = np.where(eligible, bic, np.inf)
+    any_ok = eligible.any(axis=1)
+    choice = np.argmin(bic_e, axis=1)
+    rows = np.arange(N)
+    cols = ["alpha", *[f"beta_{f}" for f in pool], "e", "sigma", "n_obs", "chosen", "bic"]
+    out = pd.DataFrame(np.nan, index=returns.index, columns=cols)
+    out["alpha"] = np.where(any_ok, np.column_stack([f["alpha"].to_numpy() for f in fits])[rows, choice], np.nan)
+    for f in pool:
+        b = np.column_stack([fit[f"beta_{f}"].to_numpy() if f"beta_{f}" in fit else np.zeros(N) for fit in fits])
+        out[f"beta_{f}"] = np.where(any_ok, b[rows, choice], np.nan)
+    out["e"] = np.where(any_ok, e[rows, choice], np.nan)
+    out["sigma"] = np.where(any_ok, sig[rows, choice], np.nan)
+    out["n_obs"] = np.where(any_ok, n[rows, choice], np.nan)
+    out["chosen"] = np.where(any_ok, choice, np.nan)
+    out["bic"] = np.where(any_ok, bic_e[rows, choice], np.nan)
+    return out, names
+
+
 def residual_score(resid: pd.DataFrame, m: int) -> pd.Series:
     """z_t = S_t / (sigma_t * sqrt(m)),  S_t = sum_{j=0}^{m-1} e_{t-j}.
 
@@ -183,19 +235,35 @@ def residual_score(resid: pd.DataFrame, m: int) -> pd.Series:
 class ResidualCache:
     """Memoises rolling fits per (F, L) and scores per (F, L, m) for one dataset."""
 
-    def __init__(self, returns: pd.DataFrame, target: str = "GDX", min_obs_frac: float = 0.9):
+    def __init__(self, returns: pd.DataFrame, target: str = "GDX", min_obs_frac: float = 0.9,
+                 dynamic_pool: list[str] = FACTORS):
         self.returns = returns
         self.target = target
         self.min_obs_frac = min_obs_frac
+        self.dynamic_pool = list(dynamic_pool)
+        self.dynamic_names: list[str] = []
         self._resid: dict[tuple, pd.DataFrame] = {}
         self._z: dict[tuple, pd.Series] = {}
 
     def residuals(self, factors, lookback: int) -> pd.DataFrame:
         key = (check_factor_set(factors), int(lookback))
         if key not in self._resid:
-            self._resid[key] = rolling_residuals(self.returns, key[0], key[1],
-                                                 self.target, self.min_obs_frac)
+            if key[0] == (DYNAMIC,):
+                self._resid[key], self.dynamic_names = rolling_best_bic(
+                    self.returns, key[1], self.dynamic_pool, self.target, self.min_obs_frac)
+            else:
+                self._resid[key] = rolling_residuals(self.returns, key[0], key[1],
+                                                     self.target, self.min_obs_frac)
         return self._resid[key]
+
+    def chosen_sets(self, lookback: int) -> pd.Series:
+        """BEST_BIC only: name of the factor set chosen on each day (NaN before live)."""
+        r = self.residuals((DYNAMIC,), lookback)
+        names = np.array(self.dynamic_names, dtype=object)
+        out = pd.Series(np.nan, index=r.index, dtype=object)
+        ok = r["chosen"].notna()
+        out[ok] = names[r.loc[ok, "chosen"].astype(int)]
+        return out.rename("chosen_set")
 
     def z(self, factors, lookback: int, m: int) -> pd.Series:
         key = (check_factor_set(factors), int(lookback), int(m))

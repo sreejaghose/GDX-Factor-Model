@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.data import check_adjusted_closes, load_dataset  # noqa: E402
 from src.grid import GridResult, load_grid, run_grid  # noqa: E402
-from src.factor_model import full_sample_ols  # noqa: E402
+from src.factor_model import DYNAMIC, full_sample_ols  # noqa: E402
 from src.forecast import forecast_cache  # noqa: E402
 from src.metrics import MIN_DAYS_PER_MONTH, grid_metrics  # noqa: E402
 from src import report as rp  # noqa: E402
@@ -374,12 +374,23 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
         f3 = rp.plot_gamma({f"{'+'.join(F)} L={L} m={m}": fcache.forecast(F, L, m) for m in cfg["grid"]["m"]},
                            periods, figs / "gamma.png")
 
-    # 4 rolling betas
-    fs = full_sample_ols(returns, F)
+    # 4 rolling betas (BEST_BIC: betas of the model chosen each day, 0 when a factor is out)
+    dynamic = F == (DYNAMIC,)
     betas = {f"L={x}": rc.betas(F, x) for x in sorted({L, 60, 250})}
-    f4 = rp.plot_rolling_betas(betas, figs / "rolling_betas.png",
-                               full_sample={f"beta_{f}": fs[f"Beta_{f}"] for f in F},
+    full_sample = None
+    if not dynamic:
+        fs = full_sample_ols(returns, F)
+        full_sample = {f"beta_{f}": fs[f"Beta_{f}"] for f in F}
+    f4 = rp.plot_rolling_betas(betas, figs / "rolling_betas.png", full_sample=full_sample,
                                title=f"Stage-1 rolling betas, {'+'.join(F)}")
+    f4b = None
+    if dynamic:
+        chosen = rc.chosen_sets(L).loc[g.dates[dev | val]]
+        chosen.to_csv(RESULTS / "best_bic_chosen_sets.csv")
+        freq = chosen.value_counts(normalize=True).rename("share of days").to_frame()
+        freq.to_csv(RESULTS / "best_bic_chosen_frequency.csv")
+        f4b = rp.plot_factor_inclusion(chosen, rc.dynamic_pool, periods, figs / "best_bic_factors.png",
+                                       f"Factors in the daily lowest-BIC model (L = {L})")
 
     # 5 equity + drawdown
     full = dev | val
@@ -540,6 +551,10 @@ validation {periods['validation'][0].date()} → {periods['validation'][1].date(
          "<p>Not applicable: this is the single-regression (factor-only) model. There is no Stage-2 "
          "forecast; the trade direction is always −sign(z).</p>"),
         ("4. Stage-1 rolling betas", rp.img_tag(f4)),
+        *([("4b. Which factor set the daily BIC choice uses", rp.img_tag(f4b) + rp.table_html(
+            freq.head(12), 3) + "<p class='muted'>Each day all 31 subsets of SPY, IAU, GLD, TLT, GDXJ are "
+            "fitted on the trailing window and the lowest-BIC one supplies that day's residual.</p>")]
+          if f4b else []),
         ("5. Equity curve and drawdown", rp.img_tag(f5)),
         ("Growth of $1,000", rp.img_tag(f5b) + rp.table_html(gtab, 2) +
          "<p class='muted'>Fully funded: the $1,000 earns the Fed Funds rate and carries the strategy's 1x "

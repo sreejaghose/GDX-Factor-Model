@@ -364,6 +364,29 @@ def plot_param_cube(table: pd.DataFrame, fixed: dict, path, highlight: dict | No
     return _save(fig, path)
 
 
+def plot_factor_inclusion(chosen: pd.Series, factors: list[str], periods: dict, path, title: str = "") -> Path:
+    """BEST_BIC diagnostic: share of days each factor is in the chosen model, by year."""
+    c = chosen.dropna()
+    years = c.index.year
+    share = pd.DataFrame({f: c.str.split("+").map(lambda s, f=f: f in s).groupby(years).mean() for f in factors})
+    fig, ax = plt.subplots(figsize=(11, 4.2))
+    palette = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
+    for col, f in zip(palette, factors):
+        ax.plot(share.index, share[f] * 100, marker="o", ms=5, lw=2, color=col, label=f)
+    for name, (a, b) in periods.items():
+        ax.axvspan(a.year - 0.5, b.year + 0.5, color=DEV_COLOR if name == "development" else VAL_COLOR,
+                   alpha=0.45, lw=0, zorder=0)
+    ax.set_ylim(-3, 103)
+    ax.set_ylabel("% of days in the chosen model")
+    ax.set_xticks(share.index)
+    ax.grid(axis="y", alpha=0.3)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.legend(ncol=len(factors), frameon=False, fontsize=9, loc="upper left", bbox_to_anchor=(0, 1.13))
+    ax.set_title(title or "Which factors the daily lowest-BIC model includes", loc="left", pad=28)
+    return _save(fig, path)
+
+
 # ---------------------------------------------------------------------------
 # Sensitivity tables
 # ---------------------------------------------------------------------------
