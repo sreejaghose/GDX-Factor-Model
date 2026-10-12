@@ -3,8 +3,7 @@
 # deliberately allowed together. Superset of config/grid.yaml (its 3 factor sets are
 # included unchanged), so its 10,800 configs are counted inside this grid's N.
 # Specified after the validation period was seen -> validation results are a logged
-# protocol deviation; judge on OOS only. Hard filters disabled at the user's request
-    (reported, not applied).
+# protocol deviation; judge on OOS only.
 
 grid:
   factors:
@@ -43,6 +42,7 @@ fixed:
   protocol_note: >-
     All-combinations exploration (no GDXJ, original 2008 window), specified after
     validation was seen; validation results are a logged deviation, judge on OOS only.
+    Hard filters disabled at the user's request (reported, not applied).
 
 reference_only:
   policy: [D_stack_2x]
