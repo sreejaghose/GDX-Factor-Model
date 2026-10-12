@@ -1,0 +1,15 @@
+{
+  "n_configs_total": 7200,
+  "n_selectable": 5400,
+  "n_reference_only": 1800,
+  "signal_start": "2008-05-23",
+  "grid_yaml": "config/grid_factor_only.yaml",
+  "grid_yaml_sha256": "4885564ca9d8ef11b4b380c9c68b0672c74fb7ff0466700ce95f166a4dfdcab6",
+  "model": "factor_only",
+  "cost_bps": 2.0,
+  "periods": [
+    "development",
+    "validation",
+    "full"
+  ]
+}
