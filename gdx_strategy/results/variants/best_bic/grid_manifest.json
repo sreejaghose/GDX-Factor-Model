@@ -1,0 +1,15 @@
+{
+  "n_configs_total": 4800,
+  "n_selectable": 3600,
+  "n_reference_only": 1200,
+  "signal_start": "2011-10-07",
+  "grid_yaml": "config/grid_best_bic.yaml",
+  "grid_yaml_sha256": "21bc254eee3dab534a042b155af139bfcd450090b5c1d0cf66fd29f7140b32ba",
+  "model": "two_stage",
+  "cost_bps": 2.0,
+  "periods": [
+    "development",
+    "validation",
+    "full"
+  ]
+}
