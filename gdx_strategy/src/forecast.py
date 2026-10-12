@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 DirectionMode = Literal["estimated", "reversion"]
 DEFAULT_MIN_OBS = 250
+MODELS = ("two_stage", "factor_only")
 
 
 def _prefix(a: np.ndarray) -> np.ndarray:
@@ -83,18 +84,37 @@ def predictive_regression(z: pd.Series, exret: pd.Series, window: int | None = N
     return out
 
 
+def factor_only_frame(z: pd.Series) -> pd.DataFrame:
+    """Single-regression model: no Stage 2. Same columns as predictive_regression
+    (gamma / r_hat are NaN) plus ``live``: a signal exists whenever z_t exists."""
+    z = z.astype(float)
+    out = pd.DataFrame({"z": z, "gamma": np.nan, "gamma_t": np.nan, "n_pairs": 0.0, "ic_alpha": np.nan,
+                        "ic_alpha_t": np.nan, "ic_gamma": np.nan, "ic_gamma_t": np.nan, "r_hat": np.nan},
+                       index=z.index)
+    out["live"] = z.notna()
+    return out
+
+
+def signal_live(fc: pd.DataFrame) -> pd.Series:
+    """Rows on which the model can issue a signal (two-stage: r_hat exists; factor-only: z exists)."""
+    return fc["live"] if "live" in fc else fc["r_hat"].notna()
+
+
 def trade_direction(fc: pd.DataFrame, mode: DirectionMode = "estimated") -> pd.Series:
     """+1 long / -1 short / 0 flat or unavailable. The |z| >= k gate is applied later.
 
-    estimated : sign(r_hat_{t+1})  -- data decides reversion vs continuation
-    reversion : -sign(z_t)         -- imposes mean reversion (only needs z, but is
-                                      gated on r_hat being available so both modes
-                                      start on the same day)
+    estimated : sign(r_hat_{t+1})  -- data decides reversion vs continuation (two-stage only)
+    reversion : -sign(z_t)         -- imposes mean reversion; in the two-stage model it is
+                                      gated on r_hat being available so both modes start
+                                      on the same day
     """
     if mode == "estimated":
+        if "live" in fc:
+            raise ValueError("direction_mode 'estimated' needs the Stage-2 forecast; "
+                             "the factor_only model supports 'reversion' only")
         d = np.sign(fc["r_hat"])
     elif mode == "reversion":
-        d = -np.sign(fc["z"]).where(fc["r_hat"].notna())
+        d = -np.sign(fc["z"]).where(signal_live(fc))
     else:
         raise ValueError(f"direction_mode must be 'estimated' or 'reversion', got {mode!r}")
     return d.fillna(0.0).astype(int).rename("direction")
@@ -122,19 +142,36 @@ def summarize(fc: pd.DataFrame) -> dict:
 
 
 class ForecastCache:
-    """Memoises Stage-2 output per (F, L, m) on top of a ResidualCache (W is fixed)."""
+    """Memoises the model output per (F, L, m) on top of a ResidualCache.
+
+    model='two_stage'  : factor regression -> z -> Stage-2 predictive regression (W fixed)
+    model='factor_only': factor regression -> z only (one regression; no gamma / r_hat)
+    """
 
     def __init__(self, resid_cache: ResidualCache, window: int | None = None,
-                 min_obs: int = DEFAULT_MIN_OBS):
+                 min_obs: int = DEFAULT_MIN_OBS, model: str = "two_stage"):
+        if model not in MODELS:
+            raise ValueError(f"model must be one of {MODELS}, got {model!r}")
         self.rc = resid_cache
         self.window = window
         self.min_obs = min_obs
+        self.model = model
         self._fc: dict[tuple, pd.DataFrame] = {}
 
     def forecast(self, factors, lookback: int, m: int) -> pd.DataFrame:
         key = (check_factor_set(factors), int(lookback), int(m))
         if key not in self._fc:
             z = self.rc.z(*key)
-            exret = self.rc.returns[f"ExRet_{self.rc.target}"]
-            self._fc[key] = predictive_regression(z, exret, self.window, self.min_obs)
+            if self.model == "factor_only":
+                self._fc[key] = factor_only_frame(z)
+            else:
+                exret = self.rc.returns[f"ExRet_{self.rc.target}"]
+                self._fc[key] = predictive_regression(z, exret, self.window, self.min_obs)
         return self._fc[key]
+
+
+def forecast_cache(returns: pd.DataFrame, fixed: dict) -> ForecastCache:
+    """ForecastCache built from a config's ``fixed`` block (model defaults to two_stage)."""
+    rc = ResidualCache(returns, min_obs_frac=fixed["stage1_min_obs_frac"])
+    return ForecastCache(rc, window=fixed.get("stage2_window"), min_obs=fixed.get("stage2_min_obs", DEFAULT_MIN_OBS),
+                         model=fixed.get("model", "two_stage"))

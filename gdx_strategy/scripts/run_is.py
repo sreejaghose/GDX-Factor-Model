@@ -8,6 +8,10 @@
   python scripts/run_is.py --report     # rebuild grid_results.parquet + report.html from
                                         # the existing frozen_config.json (no re-selection)
 
+  Variant (one regression, no Stage 2), kept separate from the frozen two-stage results:
+  python scripts/run_is.py --grid config/grid_factor_only.yaml --results results/variants/factor_only \
+      --validate --reason "<why validation is being looked at again>"
+
 Everything is deterministic (seeded); rerunning the development stage reproduces
 the same shortlist.
 """
@@ -30,8 +34,8 @@ sys.path.insert(0, str(ROOT))
 
 from src.data import check_adjusted_closes, load_dataset  # noqa: E402
 from src.grid import GridResult, load_grid, run_grid  # noqa: E402
-from src.factor_model import ResidualCache, full_sample_ols  # noqa: E402
-from src.forecast import ForecastCache  # noqa: E402
+from src.factor_model import full_sample_ols  # noqa: E402
+from src.forecast import forecast_cache  # noqa: E402
 from src.metrics import MIN_DAYS_PER_MONTH, grid_metrics  # noqa: E402
 from src import report as rp  # noqa: E402
 from src.robustness import (FILTERS, filter_funnel, hard_filters, make_selection_rule,  # noqa: E402
@@ -41,6 +45,7 @@ from src.splits import (ValidationGate, evaluate_validation, load_splits, split_
 
 log = logging.getLogger("run_is")
 RESULTS = ROOT / "results"
+GRID_YAML = ROOT / "config" / "grid.yaml"
 PARAMS = ["factors", "lookback", "m", "k", "H", "policy", "direction_mode"]
 KEY_METRICS = ["sharpe", "sharpe_gross", "ann_return", "ann_vol", "sortino", "max_drawdown", "calmar",
                "nw_tstat", "hit_rate", "profit_factor", "mean_trade", "n_entries", "entries_per_month",
@@ -120,7 +125,7 @@ def development(args, cfg, splits, returns, workbook):
     short = passing.head(sel["shortlist_size"]).copy()
 
     # statistical checks on the shortlist
-    n_trials = g.n_tested
+    n_trials = g.n_tested + int(cfg["fixed"].get("prior_trials", 0))  # every config tried on this data
     sr_trials = ranked["sharpe"].to_numpy() / np.sqrt(252)
     checks = {cid: statistical_checks(g, cid, dev, cfg["fixed"]["cost_bps"], sr_trials, n_trials,
                                       sel["stats"]) for cid in short.index}
@@ -218,6 +223,10 @@ def validation_and_freeze(args, cfg, splits, returns, workbook, g, ranked, short
                    "validation": [g.dates[val][0], g.dates[val][-1]],
                    "signal_start": g.signal_start},
         "n_configs_tested": g.n_tested,
+        "n_trials_for_dsr": g.n_tested + int(cfg["fixed"].get("prior_trials", 0)),
+        "model": cfg["fixed"].get("model", "two_stage"),
+        "grid_yaml": str(GRID_YAML.relative_to(ROOT)),
+        "protocol_note": cfg["fixed"].get("protocol_note"),
         "selection_rule": ("dev hard filters (" + ", ".join(FILTERS) + ") -> rank by neighbourhood median "
                            "dev net Sharpe (same categorical params, numeric params +-1 grid step) -> top "
                            f"{sel['shortlist_size']} -> validation hard filters -> composite rank of "
@@ -295,8 +304,9 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
     pp = prim["params"]
     F, L, M = tuple(pp["factors"]), pp["lookback"], pp["m"]
     finalists = [prim["config_id"]] + [a["config_id"] for a in frozen["alternates"]]
-    rc = ResidualCache(returns, min_obs_frac=cfg["fixed"]["stage1_min_obs_frac"])
-    fcache = ForecastCache(rc, window=cfg["fixed"]["stage2_window"], min_obs=cfg["fixed"]["stage2_min_obs"])
+    fcache = forecast_cache(returns, cfg["fixed"])
+    rc = fcache.rc
+    model = cfg["fixed"].get("model", "two_stage")
     exret = returns["ExRet_GDX"]
 
     # parquet: every config x period
@@ -312,7 +322,8 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
     (RESULTS / "grid_manifest.json").write_text(json.dumps(_jsonable({
         "n_configs_total": len(g.configs), "n_selectable": g.n_tested,
         "n_reference_only": int((g.configs["policy"] == "D_stack_2x").sum()),
-        "signal_start": g.signal_start, "grid_yaml_sha256": _sha256(ROOT / "config" / "grid.yaml"),
+        "signal_start": g.signal_start, "grid_yaml": str(GRID_YAML.relative_to(ROOT)),
+        "grid_yaml_sha256": _sha256(GRID_YAML), "model": model,
         "cost_bps": cost, "periods": ["development", "validation", "full"]}), indent=2))
 
     def closes(mask):
@@ -338,8 +349,10 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
                            figs / "heatmap_L_k.png", highlight={**pp, "factors": "+".join(F)})
 
     # 3 gamma over time
-    f3 = rp.plot_gamma({f"{'+'.join(F)} L={L} m={m}": fcache.forecast(F, L, m) for m in cfg["grid"]["m"]},
-                       periods, figs / "gamma.png")
+    f3 = None
+    if model == "two_stage":
+        f3 = rp.plot_gamma({f"{'+'.join(F)} L={L} m={m}": fcache.forecast(F, L, m) for m in cfg["grid"]["m"]},
+                           periods, figs / "gamma.png")
 
     # 4 rolling betas
     fs = full_sample_ols(returns, F)
@@ -470,7 +483,8 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
 <ul>
 <li>Development net Sharpe {pdv['sharpe']:.2f} (neighbourhood median {pdv['nbhd_median']:.2f}); validation net Sharpe {pv['sharpe']:.2f}.
  Validation failed filters: {', '.join(pv['failed_filters']) or 'none'}.</li>
-<li>Deflated Sharpe ratio (N = {frozen['n_configs_tested']:,} configs): {ck['dsr']:.3f}; placebo percentile {ck['placebo_percentile']:.1f};
+<li>Model: <b>{frozen.get('model', 'two_stage')}</b>{(' — ' + html_escape(frozen['protocol_note'])) if frozen.get('protocol_note') else ''}.</li>
+<li>Deflated Sharpe ratio (N = {frozen.get('n_trials_for_dsr', frozen['n_configs_tested']):,} configs tried on this data): {ck['dsr']:.3f}; placebo percentile {ck['placebo_percentile']:.1f};
  sign-flip Sharpe {ck['sign_flip_sharpe']:.2f}; bootstrap 95% CI [{ck['boot_sharpe_lo95']:.2f}, {ck['boot_sharpe_hi95']:.2f}].</li>
 <li>Walk-forward of the selection rule 2011–2021: stitched net Sharpe {wfs['stitched_sharpe']:.2f},
  {wfs['stability']['n_distinct_configs']} distinct configs in {wfs['stability']['n_years']} years
@@ -489,7 +503,9 @@ validation {periods['validation'][0].date()} → {periods['validation'][1].date(
          "return after signal closes with |z| ≥ k, by side, and in the trade's direction (right). Bands are "
          "±1 s.e. treating events as independent; overlapping events make them too narrow.</p>"),
         ("2. Development net Sharpe heatmaps", rp.img_tag(f2a) + rp.img_tag(f2b)),
-        ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3)),
+        ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3) if f3 else
+         "<p>Not applicable: this is the single-regression (factor-only) model. There is no Stage-2 "
+         "forecast; the trade direction is always −sign(z).</p>"),
         ("4. Stage-1 rolling betas", rp.img_tag(f4)),
         ("5. Equity curve and drawdown", rp.img_tag(f5)),
         ("Growth of $1,000", rp.img_tag(f5b) + rp.table_html(gtab, 2) +
@@ -526,7 +542,10 @@ def html_escape(s) -> str:
 
 
 def main():
+    global RESULTS, GRID_YAML
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--grid", default=str(ROOT / "config" / "grid.yaml"), help="grid / model config")
+    ap.add_argument("--results", default=str(ROOT / "results"), help="output directory")
     ap.add_argument("--workbook", default=str(ROOT / "data" / "raw" / "gold_etf_factor_regression.xlsx"))
     ap.add_argument("--validate", action="store_true", help="evaluate shortlist on validation and freeze")
     ap.add_argument("--report", action="store_true", help="rebuild report from existing frozen_config.json")
@@ -536,12 +555,16 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     np.random.seed(0)
 
-    cfg = load_grid(ROOT / "config" / "grid.yaml")
+    GRID_YAML = Path(args.grid).resolve()
+    RESULTS = Path(args.results).resolve()
+    cfg = load_grid(GRID_YAML)
     splits = load_splits(ROOT / "config" / "splits.yaml")
+    log.info("Model: %s; grid %s; results -> %s", cfg["fixed"].get("model", "two_stage"),
+             GRID_YAML.relative_to(ROOT), RESULTS)
     workbook = Path(args.workbook)
     prices, returns = load_dataset(workbook, rf_mode=cfg["fixed"]["rf_mode"], check_adjusted=False)
     check_adjusted_closes(prices)
-    RESULTS.mkdir(exist_ok=True)
+    RESULTS.mkdir(parents=True, exist_ok=True)
 
     g, ranked, short = development(args, cfg, splits, returns, workbook)
     if args.validate:

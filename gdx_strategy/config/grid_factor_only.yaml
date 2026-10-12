@@ -1,0 +1,60 @@
+# VARIANT: single regression (factor model only), no Stage-2 forecast.
+#
+# Each day: rolling OLS of GDX excess return on factor excess returns over [t-L, t-1]
+# -> out-of-window residual -> z-score; if |z| >= k, trade -sign(z) (mean reversion)
+# and hold H days under the position policy. There is no gamma / r_hat, so
+# direction_mode is fixed to 'reversion' and min_edge_bps must be 0.
+#
+# Protocol: this variant was specified AFTER the validation period (2017-2021) had
+# been seen for the two-stage model, so its validation result is a logged protocol
+# deviation and only the OOS data can judge it. The evaluation window is pinned to
+# the original grid's (signal_start) so results are directly comparable, and the
+# Deflated Sharpe Ratio counts every config tried on this data (prior_trials).
+
+grid:
+  factors:
+    - [GLD]
+    - [SPY, GLD]
+    - [SPY, GLD, TLT]
+  lookback: [20, 40, 60, 120, 250]
+  m: [1, 2, 3, 5]
+  k: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+  H: [1, 2, 3, 5, 10]
+  policy: [A_run_out, B_reset_flip, C_reset_flat]
+  direction_mode: [reversion]
+
+fixed:
+  model: factor_only
+  rf_mode: prior_month
+  min_edge_bps: 0.0
+  cost_bps: 2.0
+  stage1_min_obs_frac: 0.9
+  stage2_window: null          # unused by factor_only
+  stage2_min_obs: 250          # unused by factor_only
+  signal_start: 2008-05-23     # same evaluation window as the two-stage grid
+  prior_trials: 10800          # two-stage configs already tried on this data (for DSR)
+  protocol_note: >-
+    Single-regression variant specified after validation was seen for the two-stage
+    model; validation results are a logged deviation, judge on OOS only.
+
+reference_only:
+  policy: [D_stack_2x]
+
+report:
+  cost_bps: [0.0, 2.0, 5.0]
+
+selection:                     # identical to the two-stage grid
+  min_pct_months_with_entry: 1.0
+  near_miss_pct_months: 0.95
+  min_entries: 150
+  min_entries_ref_days: 2167
+  min_pct_years_positive: 0.70
+  require_positive_halves: true
+  require_positive_ex_top_days: true
+  shortlist_size: 10
+  n_alternates: 2
+  stats:
+    seed: 20240601
+    placebo_sims: 1000
+    bootstrap_reps: 2000
+    bootstrap_block: 10

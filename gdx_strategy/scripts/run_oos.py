@@ -32,8 +32,8 @@ sys.path.insert(0, str(ROOT))
 from src import report as rp  # noqa: E402
 from src.backtest import build_signal  # noqa: E402
 from src.data import SeamError, load_is_oos  # noqa: E402
-from src.factor_model import ResidualCache, check_factor_set, full_sample_ols  # noqa: E402
-from src.forecast import ForecastCache  # noqa: E402
+from src.factor_model import check_factor_set, full_sample_ols  # noqa: E402
+from src.forecast import forecast_cache, signal_live  # noqa: E402
 from src.grid import GRID_KEYS, config_id, load_grid, run_configs, run_grid  # noqa: E402
 from src.metrics import MIN_DAYS_PER_MONTH, grid_metrics, trade_list  # noqa: E402
 from src.robustness import FILTERS, hard_filters  # noqa: E402
@@ -120,14 +120,16 @@ def run(args) -> dict:
     is_last = seam["is_last"]
     configs = frozen_configs(frozen)
     cost = fixed["cost_bps"]
-    grid_cfg = load_grid(ROOT / "config" / "grid.yaml")  # thresholds / k-list for diagnostics only
+    # the grid file the config was selected from: thresholds / k-list / diagnostic heatmaps only
+    grid_cfg = load_grid(ROOT / frozen.get("grid_yaml", "config/grid.yaml"))
 
     # warm-up check: every frozen config has a live forecast on the last IS close
-    rc = ResidualCache(returns, min_obs_frac=fixed["stage1_min_obs_frac"])
-    fcache = ForecastCache(rc, window=fixed["stage2_window"], min_obs=fixed["stage2_min_obs"])
+    fcache = forecast_cache(returns, fixed)
+    rc = fcache.rc
+    model = fixed.get("model", "two_stage")
     for cid, c in configs.iterrows():
         fc = fcache.forecast(c["factors"], c["lookback"], c["m"])
-        if fc.loc[is_last:, "r_hat"].iloc[:2].isna().any():
+        if not signal_live(fc).loc[is_last:].iloc[:2].all():
             raise RuntimeError(f"{cid}: forecast not live at the IS/OOS seam")
 
     # OOS run: start flat, first possible trade at the last IS close
@@ -203,7 +205,7 @@ def run(args) -> dict:
                                                   "direction_mode": pp["direction_mode"]}, figs / "heatmap_L_k.png",
                            highlight=hl, title="OOS net Sharpe over (L × k) — diagnostic only, not used for selection")
     is_shade = {"development": (seam["is_first"], is_last), **oos_period}
-    f3 = rp.plot_gamma({f"{'+'.join(pc['factors'])} L={pc['lookback']} m={m}":
+    f3 = None if model != "two_stage" else rp.plot_gamma({f"{'+'.join(pc['factors'])} L={pc['lookback']} m={m}":
                         fcache.forecast(pc["factors"], pc["lookback"], m) for m in grid_cfg["grid"]["m"]},
                        is_shade, figs / "gamma.png",
                        title="Stage-2 slope γ̂_t through IS (blue) and OOS (orange)")
@@ -259,7 +261,8 @@ Heatmaps below are diagnostics over the OOS period and were not used to change a
         ("With / without 2008 and 2020 (OOS)", rp.table_html(excl)),
         ("1. Event study / decay curve (OOS)", rp.img_tag(f1)),
         ("2. OOS net Sharpe heatmaps (diagnostic)", rp.img_tag(f2a) + rp.img_tag(f2b)),
-        ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3)),
+        ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3) if f3 else
+         "<p>Not applicable: single-regression (factor-only) model, direction = −sign(z).</p>"),
         ("4. Stage-1 rolling betas", rp.img_tag(f4)),
         ("5. Equity curve and drawdown (OOS)", rp.img_tag(f5)),
         ("Growth of $1,000 (OOS)", rp.img_tag(f5b) + rp.table_html(gtab, 2)),

@@ -23,8 +23,8 @@ import pandas as pd
 import yaml
 
 from src.backtest import POLICIES, build_signal, run_engine
-from src.factor_model import ResidualCache, check_factor_set
-from src.forecast import ForecastCache
+from src.factor_model import check_factor_set
+from src.forecast import ForecastCache, forecast_cache, signal_live
 
 log = logging.getLogger(__name__)
 
@@ -70,10 +70,11 @@ def n_configs(grid: dict) -> int:
 
 
 def common_signal_start(fcache: ForecastCache, grid: dict) -> pd.Timestamp:
-    """Latest 'first valid forecast' date over every (F, L, m) in the grid."""
+    """Latest 'first live signal' date over every (F, L, m) in the grid."""
     firsts = []
     for F, L, m in itertools.product(grid["factors"], grid["lookback"], grid["m"]):
-        first = fcache.forecast(F, L, m)["r_hat"].first_valid_index()
+        live = signal_live(fcache.forecast(F, L, m))
+        first = live.idxmax() if live.any() else None
         if first is None:
             raise ValueError(f"No valid forecast for {F}, L={L}, m={m}")
         firsts.append(first)
@@ -135,8 +136,7 @@ def run_configs(returns: pd.DataFrame, configs: pd.DataFrame, fixed: dict,
                 signal_start: pd.Timestamp, n_tested: int | None = None) -> GridResult:
     """Run an explicit set of configs (rows with GRID_KEYS columns), all starting flat
     with signals zeroed before ``signal_start``."""
-    rc = ResidualCache(returns, min_obs_frac=fixed["stage1_min_obs_frac"])
-    fcache = ForecastCache(rc, window=fixed["stage2_window"], min_obs=fixed["stage2_min_obs"])
+    fcache = forecast_cache(returns, fixed)
     start = pd.Timestamp(signal_start)
     dates = returns.index
     before = np.asarray(dates < start)
@@ -164,10 +164,15 @@ def run_grid(returns: pd.DataFrame, cfg: dict, include_reference: bool = False,
     if include_reference:
         policies += cfg.get("reference_only", {}).get("policy", [])
     configs = enumerate_configs(grid, policies)
+    if signal_start is None and fixed.get("signal_start"):
+        # pinned evaluation start (e.g. to share the original grid's window)
+        signal_start = pd.Timestamp(fixed["signal_start"])
+        earliest = common_signal_start(forecast_cache(returns, fixed), grid)
+        if signal_start < earliest:
+            raise ValueError(f"fixed.signal_start {signal_start.date()} is before the slowest config is live "
+                             f"({earliest.date()})")
     if signal_start is None:
-        rc = ResidualCache(returns, min_obs_frac=fixed["stage1_min_obs_frac"])
-        fcache = ForecastCache(rc, window=fixed["stage2_window"], min_obs=fixed["stage2_min_obs"])
-        signal_start = common_signal_start(fcache, grid)
+        signal_start = common_signal_start(forecast_cache(returns, fixed), grid)
     log.info("Grid: %d configs (%d selectable); signals from %s, scored from next row",
              len(configs), n_configs(grid), pd.Timestamp(signal_start).date())
     return run_configs(returns, configs, fixed, signal_start, n_configs(grid))

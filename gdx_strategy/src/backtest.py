@@ -1,7 +1,7 @@
 """Signal -> position engine -> daily P&L and trade list.
 
 Timing (row t = close of day t):
-  * signal_t is formed from z_t / r_hat_{t+1}, both known at the close of t;
+  * signal_t is formed from z_t (and r_hat_{t+1} in the two-stage model), known at the close of t;
   * the trade executes at that same close, so pos_t is the position held AFTER
     the close of t;
   * strategy return on row t+1:  strat_{t+1} = pos_t * ExRet_GDX_{t+1} - cost_{t+1},
@@ -113,6 +113,8 @@ def build_signal(fc: pd.DataFrame, k: float, direction_mode: str = "estimated",
     d = trade_direction(fc, direction_mode)
     gate = fc["z"].abs() >= k
     if min_edge_bps > 0:
+        if "live" in fc:
+            raise ValueError("min_edge_bps needs the Stage-2 forecast; set it to 0 for the factor_only model")
         gate &= fc["r_hat"].abs() * 1e4 >= min_edge_bps
     return d.where(gate.fillna(False), 0).astype(np.int8).rename("signal")
 
@@ -205,7 +207,10 @@ def backtest(fc: pd.DataFrame, exret: pd.Series, k: float, H: int, policy: str,
     daily = pd.DataFrame({"signal": sig.to_numpy(), "pos": pos, "trade_id": tid, "new_trade": new,
                           "exit_code": ex, "exret": r, "gross": gross, "cost": cost, "net": net},
                          index=fc.index)
-    first = fc["r_hat"].first_valid_index()
+    from src.forecast import signal_live
+
+    ok = signal_live(fc)
+    first = ok.idxmax() if ok.any() else None
     live = np.zeros(len(daily), bool) if first is None else daily.index > first
     daily.loc[~live, ["gross", "cost", "net"]] = np.nan
     r_next = np.r_[np.nan_to_num(r[1:], nan=0.0), 0.0]
