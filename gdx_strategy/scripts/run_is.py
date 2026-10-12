@@ -361,6 +361,13 @@ def make_report(cfg, splits, returns, g, ranked, frozen):
     f2b = rp.plot_heatmaps(dev_tab, "k", "lookback", {"m": M, "H": pp["H"], "direction_mode": pp["direction_mode"]},
                            figs / "heatmap_L_k.png", highlight={**pp, "factors": "+".join(F)})
 
+    # 2b 3-D cube for the primary's slice (development and validation)
+    cube_tab = gr.reset_index()
+    cube_tab = cube_tab[cube_tab["period"].isin(["development", "validation"])]
+    f2c = rp.plot_param_cube(cube_tab, {"factors": "+".join(F), "policy": pp["policy"],
+                                        "direction_mode": pp["direction_mode"], "m": M},
+                             figs / "param_cube.png", highlight=pp)
+
     # 3 gamma over time
     f3 = None
     if model == "two_stage":
@@ -525,6 +532,10 @@ validation {periods['validation'][0].date()} → {periods['validation'][1].date(
          "return after signal closes with |z| ≥ k, by side, and in the trade's direction (right). Bands are "
          "±1 s.e. treating events as independent; overlapping events make them too narrow.</p>"),
         ("2. Development net Sharpe heatmaps", rp.img_tag(f2a) + rp.img_tag(f2b)),
+        ("2b. 3-D view: lookback × k × H", rp.img_tag(f2c) +
+         "<p class='muted'>Each point is one config in the primary's slice (factor set, policy, direction "
+         "and m fixed); ◇ marks the primary. An interactive version covering every factor set is in "
+         "<code>results/param_cube/param_cube.html</code>.</p>"),
         ("3. Stage-2 slope γ̂ over time", rp.img_tag(f3) if f3 else
          "<p>Not applicable: this is the single-regression (factor-only) model. There is no Stage-2 "
          "forecast; the trade direction is always −sign(z).</p>"),

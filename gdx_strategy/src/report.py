@@ -311,6 +311,60 @@ def plot_growth(values: pd.DataFrame, strategy_col: str, periods: dict, path, ti
 
 
 # ---------------------------------------------------------------------------
+# 3-D parameter cube (lookback x k x H)
+# ---------------------------------------------------------------------------
+
+def plot_param_cube(table: pd.DataFrame, fixed: dict, path, highlight: dict | None = None,
+                    periods=("development", "validation"), title: str = "") -> Path:
+    """One 3-D scatter per period: x = lookback, y = k, z = H, colour = net Sharpe.
+
+    ``table`` has one row per (config, period) with params + 'sharpe' + 'period';
+    ``fixed`` picks the slice (factors, policy, direction_mode, m). Axes use even
+    spacing with the real grid values as tick labels. Diverging red -> grey -> blue,
+    fixed at +-1 so panels are comparable.
+    """
+    from matplotlib.colors import LinearSegmentedColormap
+
+    cmap = LinearSegmentedColormap.from_list(
+        "sharpe", ["#7c1d1d", "#c03a39", "#f0efec", "#2a78d6", "#0d4a8f"])
+    t = table.copy()
+    t["factors_s"] = t["factors"].map(lambda f: "+".join(f) if isinstance(f, tuple) else f)
+    for k, v in fixed.items():
+        t = t[(t["factors_s"] if k == "factors" else t[k]) == v]
+    axes_vals = {c: sorted(t[c].unique()) for c in ("lookback", "k", "H")}
+    fig = plt.figure(figsize=(6.4 * len(periods), 6.0))
+    for i, per in enumerate(periods, start=1):
+        s = t[t["period"] == per]
+        ax = fig.add_subplot(1, len(periods), i, projection="3d")
+        xs = s["lookback"].map(axes_vals["lookback"].index)
+        ys = s["k"].map(axes_vals["k"].index)
+        zs = s["H"].map(axes_vals["H"].index)
+        sc = ax.scatter(xs, ys, zs, c=s["sharpe"].clip(-1, 1), cmap=cmap, vmin=-1, vmax=1, s=46,
+                        edgecolors="#8a8a85", linewidths=0.4, depthshade=False)
+        if highlight is not None:
+            h = s[(s["lookback"] == highlight["lookback"]) & (s["k"] == highlight["k"]) & (s["H"] == highlight["H"])]
+            if len(h):
+                ax.scatter(h["lookback"].map(axes_vals["lookback"].index), h["k"].map(axes_vals["k"].index),
+                           h["H"].map(axes_vals["H"].index), s=220, marker="D", facecolors="none",
+                           edgecolors="#141413", linewidths=2.0, depthshade=False)
+        for setter, key, lab in ((ax.set_xticks, "lookback", "lookback L"), (ax.set_yticks, "k", "threshold k"),
+                                 (ax.set_zticks, "H", "hold H (days)")):
+            vals = axes_vals[key]
+            setter(range(len(vals)), [f"{v:g}" for v in vals])
+        ax.set_xlabel("lookback L (days)")
+        ax.set_ylabel("threshold k")
+        ax.set_zlabel("hold H (days)")
+        ax.view_init(elev=22, azim=-58)
+        med = s["sharpe"].median()
+        ax.set_title(f"{per}: median {med:+.2f}, {100 * (s['sharpe'] > 0).mean():.0f}% above 0", fontsize=10)
+    cb = fig.colorbar(sc, ax=fig.axes, shrink=0.55, pad=0.06, label="net Sharpe (2 bps), clipped at ±1")
+    cb.outline.set_visible(False)
+    fig.suptitle(title or "Net Sharpe over lookback × k × H; fixed: "
+                 + ", ".join(f"{k}={v}" for k, v in fixed.items()), fontsize=11)
+    return _save(fig, path)
+
+
+# ---------------------------------------------------------------------------
 # Sensitivity tables
 # ---------------------------------------------------------------------------
 
