@@ -1,0 +1,60 @@
+# Dynamic factor model: each day, all 31 subsets of SPY, IAU, GLD, TLT, GDXJ are fitted
+# on the trailing L-day window and the lowest-BIC one supplies that day's residual,
+# which feeds the z-score and the Stage-2 forecast (factors: [BEST_BIC]).
+# Common evaluation window (signals from 2011-10-07, same as grid_all_factors_common)
+# so every candidate, including the GDXJ models, can compete on every day.
+# Filters: the three the user chose (both halves positive, >= 70% of years positive,
+# an entry in every month); minimum entries and the ex-top-1%-days test are off.
+# Specified after the validation period was seen -> logged deviation; judge on OOS.
+
+grid:
+  factors:
+    - [BEST_BIC]
+  lookback: [20, 40, 60, 120, 250]
+  m: [1, 2, 3, 5]
+  k: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+  H: [1, 2, 3, 5, 10]
+  policy: [A_run_out, B_reset_flip, C_reset_flat]
+  direction_mode: [estimated, reversion]
+
+fixed:
+  model: two_stage
+  rf_mode: prior_month
+  min_edge_bps: 0.0
+  cost_bps: 2.0
+  stage1_min_obs_frac: 0.9
+  stage2_window: null
+  stage2_min_obs: 250
+  signal_start: 2011-10-07      # common window, as in grid_all_factors_common.yaml
+  prior_trials: 165600          # 54,000 (2008 window) + 111,600 (common window) already tried
+  protocol_note: >-
+    Daily lowest-BIC factor model over all 31 combinations, specified after validation
+    was seen; validation results are a logged deviation, judge on OOS only. Filters:
+    both halves positive, >= 70% years positive, every month.
+
+walk_forward:
+  first_test_year: 2013
+
+reference_only:
+  policy: [D_stack_2x]
+
+report:
+  cost_bps: [0.0, 2.0, 5.0]
+  yearly_periods: true
+
+selection:
+  use_hard_filters: true
+  min_pct_months_with_entry: 1.0
+  near_miss_pct_months: 0.95
+  min_entries: 0                     # off
+  min_entries_ref_days: 2167
+  min_pct_years_positive: 0.70
+  require_positive_halves: true
+  require_positive_ex_top_days: false   # off (reported only)
+  shortlist_size: 10
+  n_alternates: 2
+  stats:
+    seed: 20240601
+    placebo_sims: 1000
+    bootstrap_reps: 2000
+    bootstrap_block: 10

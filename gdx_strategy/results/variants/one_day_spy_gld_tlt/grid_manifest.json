@@ -1,0 +1,15 @@
+{
+  "n_configs_total": 1680,
+  "n_selectable": 1680,
+  "n_reference_only": 0,
+  "signal_start": "2008-05-23",
+  "grid_yaml": "config/grid_h1_spy_gld_tlt.yaml",
+  "grid_yaml_sha256": "9ec0e2f6f875dbe4bf91620593f80cf32fd8b7ef4a92a2420e9717b203379fc2",
+  "model": "two_stage",
+  "cost_bps": 2.0,
+  "periods": [
+    "development",
+    "validation",
+    "full"
+  ]
+}

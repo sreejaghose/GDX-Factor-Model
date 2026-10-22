@@ -1,0 +1,83 @@
+# ONE-DAY MODEL: every position is held for exactly one day (H = 1), so there is no
+# position policy (A/B/C/D all coincide at H = 1). Grid omits H and policy; load_grid
+# fills in H: [1], policy: [N_one_day].
+# Same 31 factor sets (SPY, IAU, GLD, TLT, GDXJ), two-stage model and common late
+# window as grid_all_factors_common.yaml, of which this grid is the H = 1 slice.
+# Specified after validation was seen -> logged protocol deviation; judge on OOS only.
+
+grid:
+  factors:
+    - [SPY]
+    - [IAU]
+    - [GLD]
+    - [TLT]
+    - [GDXJ]
+    - [SPY, IAU]
+    - [SPY, GLD]
+    - [SPY, TLT]
+    - [SPY, GDXJ]
+    - [IAU, GLD]
+    - [IAU, TLT]
+    - [IAU, GDXJ]
+    - [GLD, TLT]
+    - [GLD, GDXJ]
+    - [TLT, GDXJ]
+    - [SPY, IAU, GLD]
+    - [SPY, IAU, TLT]
+    - [SPY, IAU, GDXJ]
+    - [SPY, GLD, TLT]
+    - [SPY, GLD, GDXJ]
+    - [SPY, TLT, GDXJ]
+    - [IAU, GLD, TLT]
+    - [IAU, GLD, GDXJ]
+    - [IAU, TLT, GDXJ]
+    - [GLD, TLT, GDXJ]
+    - [SPY, IAU, GLD, TLT]
+    - [SPY, IAU, GLD, GDXJ]
+    - [SPY, IAU, TLT, GDXJ]
+    - [SPY, GLD, TLT, GDXJ]
+    - [IAU, GLD, TLT, GDXJ]
+    - [SPY, IAU, GLD, TLT, GDXJ]
+  lookback: [20, 40, 60, 120, 250]
+  m: [1, 2, 3, 5]
+  k: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+  direction_mode: [estimated, reversion]
+
+fixed:
+  model: two_stage
+  allow_iau_with_gld: true
+  rf_mode: prior_month
+  min_edge_bps: 0.0
+  cost_bps: 2.0
+  stage1_min_obs_frac: 0.9
+  stage2_window: null
+  stage2_min_obs: 250
+  prior_trials: 158160         # 54,000 (2008 grid) + 111,600 (common grid) - the 7,440 here, already among them
+  protocol_note: >-
+    One-day hold (H = 1, no position policy), all 31 factor sets on the common late window, specified after
+    validation was seen; validation results are a logged deviation, judge on OOS only. Hard filters disabled at the user's request
+    (reported, not applied).
+
+walk_forward:
+  first_test_year: 2013        # needs at least a year of training inside the late window
+
+report:
+  cost_bps: [0.0, 2.0, 5.0]
+  yearly_periods: false        # keep grid_results.parquet to development / validation / full
+
+selection:                     # same thresholds as the original grid, but NOT applied:
+  use_hard_filters: false      # ranked purely by neighbourhood score; filters reported only
+  min_pct_months_with_entry: 1.0
+  near_miss_pct_months: 0.95
+  min_entries: 150
+  min_entries_ref_days: 2167   # scaled pro rata, so shorter windows need proportionally fewer entries
+  min_pct_years_positive: 0.70
+  require_positive_halves: true
+  require_positive_ex_top_days: true
+  shortlist_size: 10
+  n_alternates: 2
+  stats:
+    seed: 20240601
+    placebo_sims: 1000
+    bootstrap_reps: 2000
+    bootstrap_block: 10
