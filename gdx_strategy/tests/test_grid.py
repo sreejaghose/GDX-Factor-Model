@@ -83,3 +83,9 @@ def test_one_day_policy_needs_H1(tmp_path):
         "  direction_mode:", "  H: [1, 2]\n  policy: [N_one_day]\n  direction_mode:"))
     with pytest.raises(ValueError, match="needs H"):
         load_grid(p)
+
+
+def test_one_day_spy_gld_tlt_grid():
+    g = load_grid(ROOT / "config" / "grid_h1_spy_gld_tlt.yaml")["grid"]
+    assert sorted({x for f in g["factors"] for x in f}) == ["GLD", "SPY", "TLT"]
+    assert len(g["factors"]) == 7 and g["policy"] == ["N_one_day"] and n_configs(g) == 1_680
