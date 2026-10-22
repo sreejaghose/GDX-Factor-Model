@@ -118,7 +118,8 @@ def simplicity_key(configs: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({"n_factors": configs["factors"].map(len),
                          "H": configs["H"],
                          "policy_rank": configs["policy"].map({"B_reset_flip": 0, "A_run_out": 1,
-                                                               "C_reset_flat": 2, "D_stack_2x": 3})},
+                                                               "C_reset_flat": 2, "D_stack_2x": 3,
+                                                               "N_one_day": 0})},
                         index=configs.index)
 
 

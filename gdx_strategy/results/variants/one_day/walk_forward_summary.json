@@ -1,0 +1,21 @@
+{
+  "stability": {
+    "n_years": 9,
+    "n_distinct_configs": 7,
+    "n_config_switches": 7,
+    "mean_params_changed_per_switch": 2.5,
+    "modal_share": {
+      "factors": 0.5555555555555556,
+      "lookback": 0.5555555555555556,
+      "m": 0.5555555555555556,
+      "k": 0.6666666666666666,
+      "H": 1.0,
+      "policy": 1.0,
+      "direction_mode": 0.5555555555555556
+    },
+    "red_flag": true
+  },
+  "stitched_sharpe": -0.18634651202689506,
+  "stitched_ann_return": -0.05745667219161987,
+  "primary_in_walk_forward_years": 0
+}

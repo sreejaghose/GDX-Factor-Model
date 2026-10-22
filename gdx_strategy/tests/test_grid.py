@@ -66,3 +66,20 @@ def test_save_load_roundtrip(small, tmp_path):
     assert h.signal_start == g.signal_start and h.n_tested == g.n_tested
     np.testing.assert_array_equal(h.pos, g.pos)
     pd.testing.assert_frame_equal(h.net_returns(2.0), g.net_returns(2.0))
+
+
+def test_one_day_grid_has_no_policy_or_H():
+    cfg = load_grid(ROOT / "config" / "grid_h1.yaml")
+    g = cfg["grid"]
+    assert g["H"] == [1] and g["policy"] == ["N_one_day"]
+    c = enumerate_configs(g)
+    assert n_configs(g) == len(c) == 31 * 5 * 4 * 6 * 2
+    assert c.index[0].endswith("|H1|N|est")
+
+
+def test_one_day_policy_needs_H1(tmp_path):
+    p = tmp_path / "g.yaml"
+    p.write_text((ROOT / "config" / "grid_h1.yaml").read_text().replace(
+        "  direction_mode:", "  H: [1, 2]\n  policy: [N_one_day]\n  direction_mode:"))
+    with pytest.raises(ValueError, match="needs H"):
+        load_grid(p)

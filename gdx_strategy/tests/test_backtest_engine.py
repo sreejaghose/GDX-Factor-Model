@@ -152,3 +152,18 @@ def test_exit_on_final_close_not_charged():
     res = backtest(fc, pd.Series(0.0, index=fc.index), k=2, H=2, policy="A_run_out", cost_bps=10)
     assert res.daily["pos"].tolist() == [0, -1, -1, 0]
     assert res.trades["cost"].sum() == pytest.approx(res.daily["cost"].sum()) == pytest.approx(1e-3)
+
+
+# ---- N_one_day ------------------------------------------------------------------
+
+def test_one_day_position_is_the_signal():
+    rng = np.random.default_rng(0)
+    sig = rng.choice([-1, 0, 1], size=500)
+    assert pos_of(sig, 1, "N_one_day") == sig.tolist()
+    for p in ("A_run_out", "B_reset_flip", "C_reset_flat", "D_stack_2x"):
+        assert pos_of(sig, 1, p) == sig.tolist()  # at H = 1 every policy is the one-day rule
+
+
+def test_one_day_rejects_longer_hold():
+    with pytest.raises(ValueError, match="H = 1"):
+        run_engine(np.array([0, 1, 0]), 2, "N_one_day")

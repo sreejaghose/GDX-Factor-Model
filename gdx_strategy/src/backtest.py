@@ -14,6 +14,10 @@ Order of events at each close: (1) a trade whose clock hits H is closed;
 (2) the day's signal is applied. A signal on the expiry day therefore opens a
 new trade (in the same direction the position is simply kept, at no cost).
 
+Policy N_one_day is the plain one-day rule (H = 1, no position policy): pos_t =
+signal_t, so every position is held for exactly the next day's return. With H = 1
+policies A, B and C already coincide; N_one_day just names that case.
+
 Returns are a self-financing overlay on 1x notional, in excess of cash.
 """
 from __future__ import annotations
@@ -31,8 +35,10 @@ except ImportError:  # pragma: no cover - plain-Python fallback
             return args[0]
         return lambda f: f
 
-POLICIES = {"A_run_out": 0, "B_reset_flip": 1, "C_reset_flat": 2, "D_stack_2x": 3}
-SELECTABLE_POLICIES = ("A_run_out", "B_reset_flip", "C_reset_flat")  # D is reference-only
+POLICIES = {"A_run_out": 0, "B_reset_flip": 1, "C_reset_flat": 2, "D_stack_2x": 3,
+            "N_one_day": 0}  # N: H = 1 only, where it is identical to A (and B, C)
+SELECTABLE_POLICIES = ("A_run_out", "B_reset_flip", "C_reset_flat", "N_one_day")  # D is reference-only
+ONE_DAY = "N_one_day"
 
 # exit codes written on the close where a trade ends
 EXIT_NONE, EXIT_EXPIRY, EXIT_FLIP, EXIT_SIGNAL_FLAT = 0, 1, 2, 3
@@ -99,6 +105,8 @@ def run_engine(signal, H: int, policy: str):
     H = int(H)
     if H < 1:
         raise ValueError("H must be >= 1")
+    if policy == ONE_DAY and H != 1:
+        raise ValueError(f"policy {ONE_DAY} is the one-day rule and needs H = 1, got H = {H}")
     sig = np.asarray(signal)
     if not np.isin(sig, (-1, 0, 1)).all():
         raise ValueError("signal must be in {-1, 0, +1}")

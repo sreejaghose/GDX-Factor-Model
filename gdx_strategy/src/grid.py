@@ -22,14 +22,14 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from src.backtest import POLICIES, build_signal, run_engine
+from src.backtest import ONE_DAY, POLICIES, build_signal, run_engine
 from src.factor_model import check_factor_set, has_iau_and_gld
 from src.forecast import ForecastCache, forecast_cache, signal_live
 
 log = logging.getLogger(__name__)
 
 GRID_KEYS = ["factors", "lookback", "m", "k", "H", "policy", "direction_mode"]
-POLICY_SHORT = {"A_run_out": "A", "B_reset_flip": "B", "C_reset_flat": "C", "D_stack_2x": "D"}
+POLICY_SHORT = {"A_run_out": "A", "B_reset_flip": "B", "C_reset_flat": "C", "D_stack_2x": "D", ONE_DAY: "N"}
 DIR_SHORT = {"estimated": "est", "reversion": "rev"}
 
 
@@ -37,6 +37,9 @@ def load_grid(path: str | Path) -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f)
     g = cfg["grid"]
+    if "H" not in g and "policy" not in g:
+        # one-day model: hold every position for exactly one day, no position policy
+        g["H"], g["policy"] = [1], [ONE_DAY]
     missing = [k for k in GRID_KEYS if k not in g]
     if missing:
         raise ValueError(f"grid.yaml missing keys: {missing}")
@@ -49,6 +52,8 @@ def load_grid(path: str | Path) -> dict:
     for p in g["policy"] + cfg.get("reference_only", {}).get("policy", []):
         if p not in POLICIES:
             raise ValueError(f"Unknown policy {p!r}")
+    if ONE_DAY in g["policy"] and list(g["H"]) != [1]:
+        raise ValueError(f"policy {ONE_DAY} needs H: [1], got {g['H']}")
     return cfg
 
 

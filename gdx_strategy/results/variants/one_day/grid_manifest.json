@@ -1,0 +1,15 @@
+{
+  "n_configs_total": 7440,
+  "n_selectable": 7440,
+  "n_reference_only": 0,
+  "signal_start": "2011-10-07",
+  "grid_yaml": "config/grid_h1.yaml",
+  "grid_yaml_sha256": "f6a7bf863a6a552e778d8d8094297ab5fa8247b6dc44fd2a29d9a64360779f27",
+  "model": "two_stage",
+  "cost_bps": 2.0,
+  "periods": [
+    "development",
+    "validation",
+    "full"
+  ]
+}
